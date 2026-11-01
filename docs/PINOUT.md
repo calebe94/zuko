@@ -11,7 +11,7 @@ This table is authoritative. Firmware and wiring must match it exactly.
 | I2S DOUT output (to PCM5102A DIN) | GP23 | any pin works |
 | Pot mux common output (analog in) | GP26 | ADC0, 100 nF to AGND |
 | Pot mux select S0 / S1 / S2 | GP6 / GP7 / GP8 | outputs |
-| Footswitch (channel toggle) | GP14 | to GND, INPUT_PULLUP, 20 ms debounce |
+| Footswitch (channel toggle) | GP14 | LATCHING switch to GND, INPUT_PULLUP, 20 ms debounce, read as a level |
 | Status LED | GP15 | external LED, active high |
 | OLED I2C0 SDA / SCL | GP4 / GP5 | SSD1306 128x64 at 0x3C |
 | Debug UART0 TX / RX | GP0 / GP1 | 115200 |
@@ -82,8 +82,21 @@ Both options below work with this pinout:
 
 ## Pot multiplexer
 
-Six potentiometers are read through one 74HC4051 (8:1 analog mux) into a single
-ADC channel (GP26 / ADC0), with S0/S1/S2 on GP6/GP7/GP8.
+Six potentiometers are read through one 8:1 analog mux into a single ADC channel
+(GP26 / ADC0), with S0/S1/S2 on GP6/GP7/GP8.
+
+**Part actually bought: CD4051BE (CMOS 4000 series), not the 74HC4051 in the original
+plan.** Two consequences:
+
+- **Power the mux from 3.3 V, not 5 V.** At VDD = 5 V the CD4051B input threshold is
+  ~3.5 V and the RP2350's 3.3 V GPIO cannot reliably drive the select pins; the pot
+  signal also has to stay inside the 0-3.3 V ADC span anyway.
+- **Channel settling.** At 3.3 V the on-resistance is higher than the HC part
+  (~250 ohm). With the 100 nF at the mux output the time constant is ~25 us, so give
+  each channel at least 150 us (about 5 time constants) before sampling. That bounds a
+  full six-channel scan at roughly 1 kHz, which is ample for potentiometers.
+
+Five units were bought, so a failed channel is a swap rather than a new order.
 
 | Mux channel | Potentiometer |
 |---|---|

@@ -87,10 +87,21 @@ Price policy, so no number has to be trusted blindly:
 | `reference` | indicative only — a third-party board revision, an out-of-stock listing or a multi-pack |
 | (blank) | nothing reliable was found: the cell is empty and the line is "to quote" |
 
-No price is ever estimated. The `SUBTOTAL` row adds only the priced lines, so it is a
-floor, not the project cost. As of 2026-10-31 the priced lines total **R$ 121,10**, and
-most of the analog chain (PCM1808, 74HC4051, op-amp, footswitch, low-noise LDO) still
-has to be quoted at a Brazilian store.
+No price is ever estimated. A blank price cell means the line has not been quoted yet.
+
+**Status 2026-11-01: the prototype parts were ordered** at Mercado Livre — R$ 244,01 of
+items, R$ 20,34 cash discount, free freight, R$ 38,72 of import costs, **R$ 262,39
+landed**. That covers the Pico 2, two PCM1808 modules, five GY-PCM5102A boards, five
+CD4051BE multiplexers, ten 10k linear pots with knobs and three pedal switches. Two
+substitutions differ from the original plan and are recorded in the CSV notes:
+
+| Planned | Bought | Consequence |
+|---|---|---|
+| 74HC4051 | CD4051BE (5x) | power it from 3.3 V, not 5 V, and allow ~150 us of settling per channel |
+| SPST momentary footswitch | latching pedal switch (3x) | firmware reads it as a **level** (channel A/B), not a press event |
+
+Still to buy before the analog front end can be tested: the input-buffer op-amp and the
+low-noise LDO for the analog rail. Not blocking: the OLED, headers and build substrate.
 
 The `status` column also separates what has to be bought from what may already be in
 the parts bin: `check-home-stock` marks items (jacks, DC jack, enclosure, LED, passives)

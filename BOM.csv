@@ -1,20 +1,20 @@
 ref,item,spec,qty,status,price_brl,price_basis,price_source,line_total_brl,notes
-U1,Raspberry Pi Pico 2 (RP2350A),"Official board, 4 MB flash, 2x Cortex-M33",1,buy,25.05,reference,Shopee BR listing (seen 2026-10-31),25.05,Third-party board price; the genuine board at RoboCore had no price captured. Verify before buying.
-U2,PCM1808 ADC module,"24-bit I2S, 96 kHz; MUST expose the SCK pin",1,buy,,,,,The cheap module has NO crystal: SCK is an input and the RP2350 generates the 12.288 MHz (route B). Check the MD0/MD1 straps are at their default (slave).
-U3,PCM5102A DAC module,"GY-PCM5102, I2S, 24-bit",1,buy,40.00,quoted,Loja Toni Eletronica (seen 2026-10-31),40.00,"Range seen: R$ 40,00 (Toni) / R$ 59,31 (Mercado Livre) / R$ 89,21 on PIX (Mimilon). Wire SCK to MCLK if the pad is exposed."
-U4,74HC4051 analog multiplexer,"DIP-16, 8:1, six pots into one ADC channel",2,buy,,,,,Buy 2 (one spare).
-U5,Input buffer op-amp,"TL074 or MC33079, DIP-14, low noise",1,buy,,,,,"Input buffer biased at 2.5 V (half of the PCM1808 VCC, not 1.65 V). See docs/PINOUT.md."
-U6,Analog rail LDO,"Low-noise, 5 V, dedicated (NOT the Pico's switching output)",1,decide,,,,,"Analog rail must stay separate from the Pico switcher. LD1117-5V (R$ 2,52, TiggerComp) and 78L05 (R$ 1,00, AutoCore) exist but are NOT low-noise: pick a low-noise LDO before buying."
-U7,SSD1306 OLED display,"0.96 in, 128x64, I2C, address 0x3C",1,buy,22.90,quoted,RoboCore (seen 2026-10-31),22.90,Phase 4. Wired to GP4/GP5 (I2C0).
-RV1-RV6,B10K linear potentiometer,"16 mm body, 6 mm shaft",6,buy,3.50,reference,Radio Componentes (listed out of stock on 2026-10-31),21.00,"Linear (B taper), not log. Gain/Bass/Middle/Treble/Presence/Master. Check the shaft type before buying knobs."
-K1-K6,Knobs,For 6 mm knurled shaft,6,buy,,,,,Depends on the shaft of the potentiometer finally chosen.
-SW1,Footswitch,"SPST momentary, soft-touch (no click)",1,buy,,,,,No reliable BR price found on 2026-10-31 (US stores only). Look in a domestic pedal-parts shop.
-J1-J3,P10 panel jack,"Mono, 6.35 mm, chassis mount",3,check-home-stock,4.05,quoted,"Eletronica Cuiaba, plastic body (seen 2026-10-31)",12.15,"Input, output and an optional loop jack. The Zuko/Thor home stock may already cover these."
-J4,DC power jack,"2.1 mm, panel mount",1,check-home-stock,,,,,The Zuko/Thor home stock may already cover this.
-ENC1,Enclosure,1590BB aluminium (or the 4-knob enclosure already in stock),1,check-home-stock,,,,,"Must fit 6 knobs + 1 footswitch + the OLED: a 1590BB fits, the 4-knob one may not. Measure first."
-PB1,Build substrate,Perfboard/protoboard or a custom PCB,1,buy,,,,,There is no KiCad project in the repository yet; perfboard is acceptable for this phase.
-HDR1,Female header strip,2x 1x20 for the Pico plus sockets for the modules,1,buy,,,,,"RoboCore: 1x20 female header, 5-pack, R$ 8,07 on PIX (2026-10-31) - not in the subtotal because it is a 5-pack."
-LED1,LED + series resistor,Status LED on GP15 (active high),1,check-home-stock,,,,,Home stock covers the resistors.
-PASS1,Analog rail passives,"100 nF per analog input, bulk at the LDO, 2.5 V bias network",1,check-home-stock,,,,,Home R/C stock covers this; confirm the values before buying anything.
+U1,Raspberry Pi Pico 2 (RP2350A),"Official board, 4 MB flash, 2x Cortex-M33",1,bought,47.09,paid,Mercado Livre order 2026-10-31,47.09,"Received. Verify on arrival that it is a Pico 2 (RP2350A, 4 MB) and not a Pico 2 W or a clone: the BOOTSEL drive name and the clock bring-up in the serial banner are the check."
+U2,PCM1808 ADC module,"24-bit I2S, 96 kHz; MUST expose the SCK pin",2,bought,14.74,paid,Mercado Livre order 2026-10-31 (2-unit pack),29.48,"Two units, one spare. No crystal on the module: SCK is an input, the RP2350 generates the 12.288 MHz (route B). Check the MD0/MD1 straps are at the slave default."
+U3,PCM5102A DAC module,"GY-PCM5102, I2S, 24-bit",5,bought,11.15,paid,Mercado Livre order 2026-10-31 (5-unit pack),55.75,Five units. Tie SCK to GND or feed it MCLK if the pad is exposed.
+U4,Analog multiplexer CD4051BE,"DIP-16, 8:1; CD4051B CMOS, NOT 74HC4051",5,bought,4.35,paid,Mercado Livre order 2026-10-31 (5-unit pack),21.75,"Substitution: CD4051BE was bought instead of 74HC4051. Power it from 3.3 V, not 5 V: at VDD = 5 V its VIH is ~3.5 V and 3.3 V GPIO does not reliably drive the select pins, and the pot range must stay inside the 0-3.3 V ADC span anyway. Ron at 3.3 V is higher (~250 ohm), so keep the 100 nF and give each channel >= 150 us of settling time."
+U5,Input buffer op-amp,"TL074 or MC33079, DIP-14, low noise",1,buy,,,,,"Still to buy. Buffer biased at 2.5 V (half of the PCM1808 VCC, not 1.65 V). Without it there is nothing to drive the ADC input for the pass-through test."
+U6,Analog rail LDO,"Low-noise, 5 V, dedicated (NOT the Pico's switching output)",1,decide,,,,,"Still open. LD1117-5V (R$ 2,52) and 78L05 (R$ 1,00) exist in BR but are not low-noise: pick the part before buying."
+U7,SSD1306 OLED display,"0.96 in, 128x64, I2C, address 0x3C",1,buy,22.90,quoted,"RoboCore, price seen 2026-10-31 (not ordered)",22.90,Phase 4 only; does not block bring-up. GP4/GP5 (I2C0).
+RV1-RV10,Potentiometer 10k linear + knob,"B taper, 16 mm body, L20 knurled shaft, knob included",10,bought,3.32,paid,Mercado Livre order 2026-10-31 (10-unit pack with knobs),33.20,"10 units with knobs: 6 are used (Gain/Bass/Middle/Treble/Presence/Master), 4 spare. 10k is acceptable for the ADC source impedance; L20 shaft length must be checked against the enclosure depth."
+SW1-SW3,Footswitch,"Pedal switch, 3 units - LATCHING, not momentary",3,bought,18.91,paid,Mercado Livre order 2026-10-31 (3-unit set),56.73,"SPEC CHANGE: the set bought is latching ('com trava'), the BOM asked for momentary soft-touch. Firmware must therefore read the switch as a LEVEL (channel A/B state), not as a press/release edge: no momentary event handling, just debounce and level. Three poles also leave two free for true-bypass wiring later."
+J1-J3,P10 panel jack,"Mono, 6.35 mm, chassis mount",3,check-home-stock,4.05,quoted,"Eletronica Cuiaba, price seen 2026-10-31",12.15,Home Zuko/Thor stock may already cover these.
+J4,DC power jack,"2.1 mm, panel mount",1,check-home-stock,,,,,Home Zuko/Thor stock may already cover this.
+ENC1,Enclosure,1590BB aluminium (or the 4-knob enclosure in stock),1,check-home-stock,,,,,Must fit 6 knobs + footswitch + OLED. Measure before buying; the 4-knob stock box may not fit.
+PB1,Build substrate,Perfboard/protoboard or custom PCB,1,buy,,,,,No KiCad project in the repo yet; perfboard is acceptable for this phase.
+HDR1,Headers / sockets,"Female 1x20 for the Pico, sockets for the modules",1,buy,,,,,"RoboCore: 1x20 female header, 5-pack, R$ 8,07 on PIX (seen 2026-10-31)."
+LED1,LED + series resistor,Status LED on GP15 (active high),1,check-home-stock,,,,,Home resistor stock covers this.
+PASS1,Analog rail passives,"100 nF per analog input, bulk at the LDO, 2.5 V bias network",1,check-home-stock,,,,,Home R/C stock covers this; confirm values before use.
 
-,SUBTOTAL (priced lines only),,,,,,,121.10,Blank price cells are 'to quote': no value was estimated.
+,SUM OF LINE TOTALS (unit prices rounded to the cent),,,,,,,279.05,"Line totals use the pack price divided by the units, rounded to the cent, so they can differ from the invoice by one cent. The ORDER row below carries the exact amounts."
+,"ORDER 2026-10-31 (Mercado Livre) - items 244.01, cash discount -20.34, freight 0.00 (listed 25.60), import costs 38.72",,,,,,,262.39,Landed total actually paid. Import costs are 15.9% of the item total.
