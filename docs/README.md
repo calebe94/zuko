@@ -6,6 +6,7 @@ Portuguese, outside this repository.
 
 | Document | Content |
 |---|---|
+| [../BOM.csv](../BOM.csv) | Purchase list (bill of materials): quantity, status, price where one was observed, and its source |
 | [PINOUT.md](PINOUT.md) | Authoritative pin map, I2S clocking options, multiplexer rationale, the RP2350 pull-down erratum, power rails |
 | [I2S.md](I2S.md) | I2S driver design as built: PIO state machines, DMA ping-pong, block budget, hardware acceptance tests |
 | [BUILD-NOTES.md](BUILD-NOTES.md) | Verified build evidence: what was actually compiled, the FPU proof, the CMSIS-DSP link proof, the PIO opcode cross-check, and the toolchain findings |

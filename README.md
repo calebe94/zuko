@@ -73,6 +73,29 @@ Note: the Docker image installs the PlatformIO platform but not the toolchain
 for the Arduino core, which PlatformIO fetches on the first build (~200 MB).
 The CI workflow caches `~/.platformio`, so only the very first run is slow.
 
+## Procurement — BOM.csv
+
+`BOM.csv` is the purchase list for this build: one row per part with quantity, a
+`status` (`buy`, `decide`, `check-home-stock`), a price where one was actually seen,
+and the source it came from. It is a shopping list, not a quote.
+
+Price policy, so no number has to be trusted blindly:
+
+| `price_basis` | Means |
+|---|---|
+| `quoted` | the value comes from a store listing seen on the date written in `price_source` |
+| `reference` | indicative only — a third-party board revision, an out-of-stock listing or a multi-pack |
+| (blank) | nothing reliable was found: the cell is empty and the line is "to quote" |
+
+No price is ever estimated. The `SUBTOTAL` row adds only the priced lines, so it is a
+floor, not the project cost. As of 2026-10-31 the priced lines total **R$ 121,10**, and
+most of the analog chain (PCM1808, 74HC4051, op-amp, footswitch, low-noise LDO) still
+has to be quoted at a Brazilian store.
+
+The `status` column also separates what has to be bought from what may already be in
+the parts bin: `check-home-stock` marks items (jacks, DC jack, enclosure, LED, passives)
+that the existing Zuko/Thor stock may cover.
+
 ## Serial output
 
 Open the USB serial monitor at 115200 (`pio device monitor`). Phase 1 prints:
@@ -87,6 +110,7 @@ Open the USB serial monitor at 115200 (`pio device monitor`). Phase 1 prints:
 
 | Path | Purpose |
 |---|---|
+| `BOM.csv` | purchase list (bill of materials) with price status and sources |
 | `platformio.ini` | build configuration |
 | `src/main.cpp` | Phase 1: audio pass-through + budget reporting |
 | `src/i2s.h` | I2S driver public interface |
