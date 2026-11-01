@@ -1,14 +1,14 @@
-// Zuko (RP2350) — Phase 0 skeleton.
+// Zuko (RP2350) — Phase 1: I2S audio pass-through.
 //
-// Proves three things and nothing else:
-//   1. the toolchain builds and the board boots,
-//   2. the requested system clock and core voltage actually came up,
-//   3. both cores run (core 0: LED + sanity maths, core 1: heartbeat).
+// Core 0 runs the audio path only:
+//   1. the Phase 0 clock/voltage bring-up and FPU sanity maths (unchanged),
+//   2. the I2S driver (PIO master clocks + DMA ping-pong) over a 32-sample block,
+//   3. the pass-through callback: copy the received block to the transmit block,
+//   4. the block-processing budget report (min/avg/max cycles per block).
+// Core 1 keeps the Phase 0 heartbeat and is otherwise idle (UI/control is Phase 4).
 //
-// No I2S, no DMA, no OLED yet.
-//
-// Phase 1 note on __not_in_flash_func: the audio hot path (per-sample DSP and
-// the FIR) will be placed in RAM with the macro in this form:
+// __not_in_flash_func syntax, now used for real: the audio hot path is placed in
+// RAM with the macro in this form:
 //
 //     float __not_in_flash_func(processSample)(float x) { ... }
 //
@@ -17,9 +17,12 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <string.h>
 #include <pico/stdlib.h>
 #include <hardware/clocks.h>
 #include <hardware/vreg.h>
+
+#include "i2s.h"
 
 namespace {
 
@@ -28,6 +31,7 @@ constexpr uint32_t kTargetCpuKhz = F_CPU / 1000;   // F_CPU comes from board_bui
 constexpr uint32_t kBlinkHalfPeriodMs = 500;       // 1 Hz blink
 constexpr uint32_t kHeartbeatMs = 500;
 constexpr uint32_t kSerialWaitMs = 2000;           // give a USB host time to attach
+constexpr uint32_t kBudgetReportBlocks = 100;      // one block is 666.7 us -> ~67 ms
 
 constexpr int kFirTaps = 32;
 constexpr int kFirIters = 1000;
@@ -44,6 +48,7 @@ int vregMillivolts(vreg_voltage v) {
 }
 
 // Tube-ish waveshaper: biased tanh with the DC offset of the bias removed.
+// Phase 2 material; kept here because it is the FPU sanity check.
 float waveshape(float x, float drive, float bias) {
     return tanhf(drive * (x + bias)) - tanhf(drive * bias);
 }
@@ -88,6 +93,14 @@ void printDspSanity() {
                   kFirIters, static_cast<unsigned long>(cycles), cyclesPerMac, sink);
 }
 
+// The I2S consumer/producer callback for this phase: copy the 32 received
+// samples (both channels, L0,R0,L1,R1,...) to the 32 transmitted samples. No
+// gain, no filtering, no processing — the point of Phase 1 is that audio
+// survives the round trip. Called from the DMA IRQ on core 0, from RAM.
+void __not_in_flash_func(audio_passthrough)(const int32_t *rx, int32_t *tx) {
+    memcpy(tx, rx, I2S_BLOCK_SAMPLES * sizeof(int32_t));
+}
+
 }  // namespace
 
 void setup() {
@@ -109,7 +122,7 @@ void setup() {
 
     const vreg_voltage vreg = vreg_get_voltage();
     Serial.println();
-    Serial.println("=== Zuko (RP2350) — Phase 0 ===");
+    Serial.println("=== Zuko (RP2350) — Phase 1 ===");
     Serial.printf("F_CPU (configured)       : %lu Hz\n", static_cast<unsigned long>(F_CPU));
     Serial.printf("set_sys_clock_khz(%lu)  : %s\n", static_cast<unsigned long>(kTargetCpuKhz),
                   clockOk ? "ok" : "FAILED (PLL cannot hit target)");
@@ -122,23 +135,57 @@ void setup() {
 
     printDspSanity();
 
+    Serial.println();
+    Serial.println("-- I2S init --");
+    Serial.printf("Sample rate  : %lu Hz\n", static_cast<unsigned long>(I2S_SAMPLE_RATE));
+    Serial.printf("Bit depth    : %lu in %lu-bit slots\n",
+                  static_cast<unsigned long>(I2S_BIT_DEPTH),
+                  static_cast<unsigned long>(I2S_SLOT_WIDTH));
+    Serial.printf("Block size   : %lu samples/ch (%lu total)\n",
+                  static_cast<unsigned long>(I2S_BLOCK_SIZE),
+                  static_cast<unsigned long>(I2S_BLOCK_SAMPLES));
+
+    i2s_init(audio_passthrough);
+    i2s_start();
+
+    Serial.println("I2S started — pass-through active.");
+
     g_clockReady = true;
 }
 
 void loop() {
     static uint32_t lastToggle = 0;
+    static uint32_t lastBudget = 0;
     static bool ledOn = false;
 
     const uint32_t now = millis();
+
     if (now - lastToggle >= kBlinkHalfPeriodMs) {
         lastToggle = now;
         ledOn = !ledOn;
         digitalWrite(kPinLed, ledOn ? HIGH : LOW);
     }
+
+    // Budget report, printed from loop() and never from the audio ISR: a slow
+    // USB host must not be able to stall the audio path.
+    i2s_budget_t b = i2s_get_budget();
+    if (b.block_count >= kBudgetReportBlocks && (now - lastBudget >= 1000)) {
+        lastBudget = now;
+        constexpr uint32_t kBudgetTotal = 163840;  // cycles of wall-clock budget per block
+        float avg_pct = 100.0f * static_cast<float>(b.avg_cycles) / kBudgetTotal;
+        float max_pct = 100.0f * static_cast<float>(b.max_cycles) / kBudgetTotal;
+        Serial.printf("[budget] min=%lu avg=%lu max=%lu cycles  (avg %.1f%% max %.1f%% of %lu)\n",
+                      static_cast<unsigned long>(b.min_cycles),
+                      static_cast<unsigned long>(b.avg_cycles),
+                      static_cast<unsigned long>(b.max_cycles),
+                      avg_pct, max_pct,
+                      static_cast<unsigned long>(kBudgetTotal));
+        i2s_reset_budget();
+    }
 }
 
 void setup1() {
-    // Core 1 will own UI, control and coefficient calculation (Phase 1+).
+    // Core 1: UI, control, coefficient calculation (idle in Phase 1).
 }
 
 void loop1() {

@@ -10,15 +10,25 @@ neural networks.
 
 ## Status
 
-Phase 0: repository skeleton and build configuration only. `src/main.cpp`
-proves the toolchain, the clock and the dual-core split. There is no DSP, I2S,
-or UI code yet.
+**Phase 1: I2S driver with PIO master clocking and DMA ping-pong.**
 
-The Phase 0 build is **verified**, not assumed: `pio run -e rpipico2` succeeds
-inside the Docker image and produces `firmware.uf2` (RAM 1.7%, flash 0.9%). The
-hardware FPU is confirmed in the linked ELF with `objdump`, and the CMSIS-DSP
-`arm_fir_f32` symbols are confirmed present in the library that ships with the
-platform. Raw evidence and the exact commands: [docs/BUILD-NOTES.md](docs/BUILD-NOTES.md).
+The I2S audio path is implemented: three PIO state machines on PIO0 generate
+MCLK (12.288 MHz), BCLK (3.072 MHz) and LRCK (48 kHz), with DMA ping-pong
+double buffering over 32-sample blocks. The audio callback is a pass-through
+(copy ADC input to DAC output). Cycle-budget instrumentation reports min/avg/max
+handler cost over Serial.
+
+The Phase 1 build is **verified**, not assumed: `pio run -e rpipico2` succeeds inside
+the Docker image and produces `firmware.uf2` (106496 B, RAM 1.9%, flash 1.0%), the
+hardware FPU is confirmed in the linked ELF, and both the DMA ISR and the audio
+callback are confirmed to sit in SRAM (`0x2000_0110` and `0x2000_01a8`). The
+hand-assembled PIO opcodes were cross-checked against `pioasm` and matched. Raw
+evidence and the exact commands: [docs/BUILD-NOTES.md](docs/BUILD-NOTES.md).
+
+What is still unverified is anything that needs a board: I2S timing, the DMA
+ping-pong actually alternating buffers, and the pass-through itself. The firmware
+carries the instrumentation for the block-processing budget, but no cycle figure has
+been measured on silicon yet.
 
 ## Architecture
 
@@ -28,6 +38,10 @@ platform. Raw evidence and the exact commands: [docs/BUILD-NOTES.md](docs/BUILD-
   12.288 MHz on GP19, BCLK 3.072 MHz on GP21, LRCK 48 kHz on GP22, all divided
   exactly from a 245.76 MHz system clock. The PCM1808 ADC and the PCM5102A DAC
   are slaves. See [docs/PINOUT.md](docs/PINOUT.md).
+- PIO: 3 state machines on PIO0 (MCLK toggle, output master with side-set
+  clocks, input slave synchronized to those clocks). See [docs/I2S.md](docs/I2S.md).
+- DMA: 4 channels (TX data + TX ctrl, RX data + RX ctrl) for ping-pong
+  double buffering. Block size: 32 samples/channel, total latency < 1.4 ms.
 - Pots: six pots through a 74HC4051 analog multiplexer into one ADC channel.
 - Core 0: audio DSP only. Core 1: UI, control, coefficient calculation.
 - Clock: 245.76 MHz at 1.20 V core, fallback 184.32 MHz (`board_build.f_cpu` in
@@ -59,21 +73,27 @@ Note: the Docker image installs the PlatformIO platform but not the toolchain
 for the Arduino core, which PlatformIO fetches on the first build (~200 MB).
 The CI workflow caches `~/.platformio`, so only the very first run is slow.
 
-## Phase 0 serial output
+## Serial output
 
-Open the USB serial monitor at 115200 (`pio device monitor`). The banner shows
-the configured `F_CPU`, the measured system clock, the core voltage, a `tanhf`
-waveshaper and a 32-tap FIR with cycles/MAC (a low single-digit figure means the
-FPU path is real). Core 1 prints a heartbeat every 500 ms.
+Open the USB serial monitor at 115200 (`pio device monitor`). Phase 1 prints:
+
+1. The Phase 0 banner (clock, voltage, FPU sanity).
+2. I2S configuration (sample rate, bit depth, block size).
+3. "I2S started — pass-through active."
+4. Periodic budget reports: `[budget] min=N avg=N max=N cycles (avg X% max X% of 163840)`.
+5. Core 1 heartbeat every 500 ms.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
 | `platformio.ini` | build configuration |
-| `src/main.cpp` | Phase 0 skeleton |
+| `src/main.cpp` | Phase 1: audio pass-through + budget reporting |
+| `src/i2s.h` | I2S driver public interface |
+| `src/i2s.cpp` | PIO programs + DMA ping-pong engine |
 | `docs/README.md` | index of the project documentation |
 | `docs/PINOUT.md` | pin map and hardware rationale |
+| `docs/I2S.md` | I2S driver design as built |
 | `docs/BUILD-NOTES.md` | verified build evidence and toolchain findings |
 | `scripts/` | host-side tools (placeholder) |
 | `Dockerfile` | reproducible build environment |
