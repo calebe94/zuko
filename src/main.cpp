@@ -16,6 +16,7 @@
 // list. Never __not_in_flash_func(float processSample)(float x).
 
 #include <Arduino.h>
+#include <cstdint>
 #include <math.h>
 #include <string.h>
 #include <pico/stdlib.h>
@@ -182,6 +183,12 @@ void loop() {
                       static_cast<unsigned long>(kBudgetTotal));
         i2s_reset_budget();
     }
+
+    // for (uint8_t io = 0; io < 8; io++)
+    // {
+    //     io_write(io&0xFF); // write to the io register
+    //     read(cd4051_in);
+    // }
 }
 
 void setup1() {
