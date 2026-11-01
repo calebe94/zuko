@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # setup-python's built-in "cache: pip" needs a requirements.txt/pyproject.toml,
+      # which this repo does not have, so pip's cache is handled here instead.
+      - name: Cache pip and PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Install platform
+        run: pio pkg install --global --platform https://github.com/maxgerhardt/platform-raspberrypi.git
+
+      - name: Build
+        run: pio run -e rpipico2
+
+      - name: Size
+        run: pio run -e rpipico2 -t size
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zuko-rp2350-firmware
+          path: .pio/build/rpipico2/firmware.uf2
+          if-no-files-found: error

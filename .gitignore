@@ -1,0 +1,16 @@
+.pio/
+.vscode/
+.idea/
+.DS_Store
+*.uf2
+*.elf
+*.bin
+*.log
+
+# Cabinet impulse responses and the C headers generated from them.
+# The IR used for development is not covered by a clear redistribution licence,
+# so neither the WAV nor the generated array is committed. Any tracked IR header
+# must be replaced by the synthetic one produced by scripts/ for CI and tests.
+*.wav
+src/cab_ir_*.h
+scripts/out/
