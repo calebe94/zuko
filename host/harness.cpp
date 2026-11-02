@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "dsp/dsp.h"
+#include "ini_map.h"
 
 namespace {
 
@@ -103,29 +104,7 @@ bool write_wav(const std::string &path, const Wav &wav) {
     return ok;
 }
 
-// Minimal INI parser: stores all key=value pairs (ignores [sections]).
-std::map<std::string, std::string> parse_ini(const std::string &path) {
-    std::map<std::string, std::string> out;
-    FILE *f = fopen(path.c_str(), "r");
-    if (!f) return out;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
-        if (len == 0 || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
-        char *eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        std::string key(line), val(eq + 1);
-        while (!key.empty() && key.back()  == ' ') key.pop_back();
-        while (!key.empty() && key.front() == ' ') key.erase(0, 1);
-        while (!val.empty() && val.back()  == ' ') val.pop_back();
-        while (!val.empty() && val.front() == ' ') val.erase(0, 1);
-        if (!key.empty()) out[key] = val;
-    }
-    fclose(f);
-    return out;
-}
+// (INI parsing moved to ini_map.h, shared with rt.)
 
 int selftest() {
     int failures = 0;
@@ -604,24 +583,21 @@ int main(int argc, char **argv) {
     }
 
     // New-style: defaults, then apply --preset, then CLI overrides.
-    float bass = 0.f, mid = 0.f, treble = 0.f;
-    float gain = 0.7f, presence = 0.5f, master = 0.8f;
+    // ALL parameters are 0-100 (see ini_map.h); converted at the end.
+    float bass = 50.f, mid = 50.f, treble = 50.f;      // 50 = 0 dB neutral
+    float gain = 9.f, presence = 50.f, master = 80.f;  // ~old defaults 0.7/0.5/0.8
     zuko::AmpModel model = zuko::AmpModel::kGeneric;
 
     // First pass: load --preset
     for (int i = 3; i < argc - 1; ++i) {
         if (std::string(argv[i]) == "--preset") {
-            auto ini = parse_ini(argv[i + 1]);
-            auto get_f = [&](const char *key, float &val) {
-                auto it = ini.find(key);
-                if (it != ini.end()) val = std::stof(it->second);
-            };
-            get_f("bass",     bass);
-            get_f("mid",      mid);
-            get_f("treble",   treble);
-            get_f("gain",     gain);
-            get_f("presence", presence);
-            get_f("master",   master);
+            auto ini = zuko_ini::parse_ini(argv[i + 1]);
+            bass     = zuko_ini::get_f(ini, "bass",     bass);
+            mid      = zuko_ini::get_f(ini, "mid",      mid);
+            treble   = zuko_ini::get_f(ini, "treble",   treble);
+            gain     = zuko_ini::get_f(ini, "gain",     gain);
+            presence = zuko_ini::get_f(ini, "presence", presence);
+            master   = zuko_ini::get_f(ini, "master",   master);
             auto it = ini.find("model");
             if (it != ini.end() && it->second == "jcm800")
                 model = zuko::AmpModel::kJcm800;
@@ -629,7 +605,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Second pass: CLI overrides
+    // Second pass: CLI overrides (also 0-100)
     for (int i = 3; i < argc; ++i) {
         std::string arg(argv[i]);
         if      (arg == "--bass"     && i + 1 < argc) bass     = std::stof(argv[++i]);
@@ -647,5 +623,12 @@ int main(int argc, char **argv) {
         else if (arg == "--preset") ++i;  // already consumed
     }
 
+    // Convert 0-100 -> internal units.
+    bass     = zuko_ini::pct_to_db(bass);
+    mid      = zuko_ini::pct_to_db(mid);
+    treble   = zuko_ini::pct_to_db(treble);
+    gain     = zuko_ini::pct_to_gain(gain);
+    presence = zuko_ini::pct_to_unit(presence);
+    master   = zuko_ini::pct_to_unit(master);
     return run_v2(in_path, out_path, bass, mid, treble, gain, presence, master, model);
 }

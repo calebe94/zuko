@@ -24,38 +24,12 @@
 #include <portaudio.h>
 
 #include "dsp/dsp.h"
+#include "../ini_map.h"
 
 namespace {
 
 constexpr uint32_t kDefaultSr = 48000;
 constexpr unsigned kFramesPerBuffer = 128;
-
-// ---------------------------------------------------------------- ini parse
-
-std::map<std::string, std::string> parse_ini(const std::string &path) {
-    std::map<std::string, std::string> kv;
-    std::ifstream f(path);
-    std::string line;
-    while (std::getline(f, line)) {
-        const size_t hash = line.find('#');
-        if (hash != std::string::npos) line = line.substr(0, hash);
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        auto trim = [](std::string s) {
-            const char *ws = " \t\r\n";
-            s.erase(0, s.find_first_not_of(ws));
-            s.erase(s.find_last_not_of(ws) + 1);
-            return s;
-        };
-        kv[trim(line.substr(0, eq))] = trim(line.substr(eq + 1));
-    }
-    return kv;
-}
-
-float getf(const std::map<std::string, std::string> &kv, const char *k, float dflt) {
-    auto it = kv.find(k);
-    return it == kv.end() ? dflt : strtof(it->second.c_str(), nullptr);
-}
 
 // ---------------------------------------------------------------- DSP state
 
@@ -195,14 +169,20 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Config: preset file first, CLI not overridden here (edit the preset).
-    const auto kv = parse_ini(preset);
-    const float gain = getf(kv, "gain", 0.7f);
-    const float presence = getf(kv, "presence", 0.5f);
-    const float master = getf(kv, "master", 0.8f);
-    const float bass = getf(kv, "bass", 0.f);
-    const float mid = getf(kv, "mid", 0.f);
-    const float treble = getf(kv, "treble", 0.f);
+    // Config: preset file, ALL parameters 0-100 (see ../ini_map.h).
+    const auto kv = zuko_ini::parse_ini(preset);
+    const float gain_pct     = zuko_ini::get_f(kv, "gain", 9.f);
+    const float presence_pct = zuko_ini::get_f(kv, "presence", 50.f);
+    const float master_pct   = zuko_ini::get_f(kv, "master", 80.f);
+    const float bass_pct     = zuko_ini::get_f(kv, "bass", 50.f);
+    const float mid_pct      = zuko_ini::get_f(kv, "mid", 50.f);
+    const float treble_pct   = zuko_ini::get_f(kv, "treble", 50.f);
+    const float gain     = zuko_ini::pct_to_gain(gain_pct);
+    const float presence = zuko_ini::pct_to_unit(presence_pct);
+    const float master   = zuko_ini::pct_to_unit(master_pct);
+    const float bass     = zuko_ini::pct_to_db(bass_pct);
+    const float mid      = zuko_ini::pct_to_db(mid_pct);
+    const float treble   = zuko_ini::pct_to_db(treble_pct);
     const std::string model = kv.count("model") ? kv.at("model") : "generic";
 
     g_engine.ts = zuko::tone_stack_init(static_cast<float>(sr), bass, mid, treble);
@@ -250,9 +230,10 @@ int main(int argc, char **argv) {
         err = Pa_StartStream(in_stream);
         if (err != paNoError) { fprintf(stderr, "Pa_StartStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
         const PaStreamInfo *info = Pa_GetStreamInfo(in_stream);
-        printf("zuko-rt live | preset=%s model=%s gain=%.2f presence=%.2f master=%.2f "
-               "EQ=%.0f/%.0f/%.0f dB | in=[%s] out=[%s] | %.1f ms latency | Enter/Ctrl+C to stop\n",
-               preset.c_str(), model.c_str(), gain, presence, master, bass, mid, treble,
+        printf("zuko-rt live | preset=%s model=%s gain=%.0f presence=%.0f master=%.0f "
+               "EQ=%.0f/%.0f/%.0f (0-100) | in=[%s] out=[%s] | %.1f ms latency | Enter/Ctrl+C to stop\n",
+               preset.c_str(), model.c_str(), gain_pct, presence_pct, master_pct,
+               bass_pct, mid_pct, treble_pct,
                Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
                info->outputLatency * 1000.f);
     } else {
@@ -267,9 +248,10 @@ int main(int argc, char **argv) {
         err = Pa_StartStream(out_stream);
         if (err != paNoError) { fprintf(stderr, "Pa_StartStream(out): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
         const PaStreamInfo *oi = Pa_GetStreamInfo(out_stream);
-        printf("zuko-rt live (split-clock) | preset=%s model=%s gain=%.2f presence=%.2f master=%.2f "
-               "EQ=%.0f/%.0f/%.0f dB | in=[%s] out=[%s] | ~%.1f ms latency | Enter/Ctrl+C to stop\n",
-               preset.c_str(), model.c_str(), gain, presence, master, bass, mid, treble,
+        printf("zuko-rt live (split-clock) | preset=%s model=%s gain=%.0f presence=%.0f master=%.0f "
+               "EQ=%.0f/%.0f/%.0f (0-100) | in=[%s] out=[%s] | ~%.1f ms latency | Enter/Ctrl+C to stop\n",
+               preset.c_str(), model.c_str(), gain_pct, presence_pct, master_pct,
+               bass_pct, mid_pct, treble_pct,
                Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
                oi->outputLatency * 1000.f);
     }
