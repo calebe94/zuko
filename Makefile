@@ -23,41 +23,34 @@ DOCKER_CACHE := zuko-pio-cache
 DOCKER_RUN   := docker run --rm -v $(DOCKER_CACHE):/root/.platformio \
                 -v $(REPO):/workspace -w /workspace $(DOCKER_IMAGE)
 
-# --- Host compiler ---
-CXX      ?= clang++
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
-PA_FLAGS := $(shell pkg-config --cflags --libs portaudio-2.0)
+# --- Host compiler: see host/Makefile and host/rt/Makefile ---
 
 # --- Live defaults (override on the command line: make live PRESET=...) ---
 PRESET  ?= presets/jcm800-punk.ini
 IN_DEV  ?= 1
 OUT_DEV ?= 0
 
-.PHONY: all test firmware verify demo rt live devices clean help
+.PHONY: all test firmware verify demo rt live devices clean host help
 
 default: all
 
-all: harness rt
+all: host
+
+host: harness rt
 
 help:
 	@echo "Targets: test | firmware | verify | demo | live | devices | clean"
 	@echo "Variables: PRESET= (default $(PRESET)), IN_DEV=, OUT_DEV="
 
 # ---------------------------------------------------------------- host builds
+# Delegated to the sub-Makefiles: they own the dependency rules, so these
+# targets always do the right thing (build if changed, say nothing if not).
 
-harness: $(HOST)/harness
-$(HOST)/harness: $(HOST)/harness.cpp $(REPO)/src/dsp/dsp.h $(REPO)/src/dsp/preamp.h \
-                 $(REPO)/src/dsp/tone_stack.h $(REPO)/src/dsp/cab_sim.h \
-                 $(REPO)/src/dsp/cab_ir.h $(REPO)/src/dsp/jcm800.h \
-                 $(HOST)/ini_map.h
-	$(CXX) $(CXXFLAGS) -I$(REPO)/src -o $@ $<
+harness:
+	$(MAKE) --no-print-directory -C $(HOST) harness
 
-rt: $(HOST)/rt/rt
-$(HOST)/rt/rt: $(HOST)/rt/rt.cpp $(REPO)/src/dsp/dsp.h $(REPO)/src/dsp/preamp.h \
-               $(REPO)/src/dsp/tone_stack.h $(REPO)/src/dsp/cab_sim.h \
-               $(REPO)/src/dsp/cab_ir.h $(REPO)/src/dsp/jcm800.h \
-               $(HOST)/ini_map.h
-	$(CXX) $(CXXFLAGS) -I$(REPO)/src -o $@ $< $(PA_FLAGS)
+rt:
+	$(MAKE) --no-print-directory -C $(HOST)/rt rt
 
 # ---------------------------------------------------------------- tests
 
