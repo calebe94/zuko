@@ -12,6 +12,7 @@
 // --in/--out are substring matches against the PortAudio device names, so
 // "--in Tank --out Headphones" picks the Tank G input and a headphone output.
 
+#include <atomic>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -78,8 +79,56 @@ struct RtEngine {
 
 RtEngine g_engine;
 
-int callback(const void *in_, void *out_, unsigned long n,
-             const PaStreamCallbackTimeInfo *, PaStreamCallbackFlags, void *) {
+// Lock-free SPSC ring linking the two streams. When input and output are on
+// DIFFERENT USB devices their clocks drift apart; a single duplex stream dies
+// with CoreAudio err=-50 on that combination. Two streams + ring decouples them.
+// Policy: underrun -> output silence; overflow -> drop oldest input.
+constexpr size_t kRingSize = 4096;  // ~85 ms at 48 kHz; drift absorbs via drop
+static_assert((kRingSize & (kRingSize - 1)) == 0, "power of two");
+
+struct Ring {
+    std::atomic<size_t> read_{0}, write_{0};
+    float buf[kRingSize]{};
+
+    void push(float v) {
+        const size_t w = write_.load(std::memory_order_relaxed);
+        const size_t r = read_.load(std::memory_order_acquire);
+        if (w - r == kRingSize) read_.store(r + 1, std::memory_order_release);  // overflow: drop oldest
+        buf[w & (kRingSize - 1)] = v;
+        write_.store(w + 1, std::memory_order_release);
+    }
+    float pop() {
+        const size_t r = read_.load(std::memory_order_relaxed);
+        const size_t w = write_.load(std::memory_order_acquire);
+        if (r == w) return 0.f;  // underrun: silence
+        read_.store(r + 1, std::memory_order_release);
+        return buf[r & (kRingSize - 1)];
+    }
+};
+
+Ring g_ring;
+
+int input_callback(const void *in_, void *, unsigned long n,
+                   const PaStreamCallbackTimeInfo *, PaStreamCallbackFlags, void *) {
+    const float *in = static_cast<const float *>(in_);
+    for (unsigned long i = 0; i < n; ++i)
+        g_ring.push(g_engine.process(in[i]));
+    return paContinue;
+}
+
+int output_callback(const void *, void *out_, unsigned long n,
+                    const PaStreamCallbackTimeInfo *, PaStreamCallbackFlags, void *) {
+    float *out = static_cast<float *>(out_);
+    for (unsigned long i = 0; i < n; ++i) {
+        const float y = g_ring.pop();
+        out[2 * i] = y;
+        out[2 * i + 1] = y;
+    }
+    return paContinue;
+}
+
+int duplex_callback(const void *in_, void *out_, unsigned long n,
+                    const PaStreamCallbackTimeInfo *, PaStreamCallbackFlags, void *) {
     const float *in = static_cast<const float *>(in_);
     float *out = static_cast<float *>(out_);
     for (unsigned long i = 0; i < n; ++i) {
@@ -186,24 +235,49 @@ int main(int argc, char **argv) {
     out_p.sampleFormat = paFloat32;
     out_p.suggestedLatency = Pa_GetDeviceInfo(out_dev)->defaultLowOutputLatency;
 
-    PaStream *stream = nullptr;
-    err = Pa_OpenStream(&stream, &in_p, &out_p, static_cast<double>(sr),
-                        kFramesPerBuffer, paClipOff, callback, nullptr);
-    if (err != paNoError) { fprintf(stderr, "Pa_OpenStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+    // Same hardware name (e.g. Tank G exposes separate in/out devices under one
+    // name) -> one duplex stream, lowest latency. Different devices -> two
+    // independent streams joined by the ring: their USB clocks drift, and a
+    // single duplex stream across them dies with CoreAudio err=-50.
+    const bool same_hw = strcmp(Pa_GetDeviceInfo(in_dev)->name,
+                                Pa_GetDeviceInfo(out_dev)->name) == 0;
 
-    err = Pa_StartStream(stream);
-    if (err != paNoError) { fprintf(stderr, "Pa_StartStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
-
-    const PaStreamInfo *info = Pa_GetStreamInfo(stream);
-    printf("zuko-rt live | preset=%s model=%s gain=%.2f presence=%.2f master=%.2f "
-           "EQ=%.0f/%.0f/%.0f dB | in=[%s] out=[%s] | %.1f ms latency | Ctrl+C to stop\n",
-           preset.c_str(), model.c_str(), gain, presence, master, bass, mid, treble,
-           Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
-           info->outputLatency * 1000.f);
+    PaStream *in_stream = nullptr, *out_stream = nullptr;
+    if (same_hw) {
+        err = Pa_OpenStream(&in_stream, &in_p, &out_p, static_cast<double>(sr),
+                            kFramesPerBuffer, paClipOff, duplex_callback, nullptr);
+        if (err != paNoError) { fprintf(stderr, "Pa_OpenStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        err = Pa_StartStream(in_stream);
+        if (err != paNoError) { fprintf(stderr, "Pa_StartStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        const PaStreamInfo *info = Pa_GetStreamInfo(in_stream);
+        printf("zuko-rt live | preset=%s model=%s gain=%.2f presence=%.2f master=%.2f "
+               "EQ=%.0f/%.0f/%.0f dB | in=[%s] out=[%s] | %.1f ms latency | Enter/Ctrl+C to stop\n",
+               preset.c_str(), model.c_str(), gain, presence, master, bass, mid, treble,
+               Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
+               info->outputLatency * 1000.f);
+    } else {
+        err = Pa_OpenStream(&in_stream, &in_p, nullptr, static_cast<double>(sr),
+                            kFramesPerBuffer, paClipOff, input_callback, nullptr);
+        if (err != paNoError) { fprintf(stderr, "Pa_OpenStream(in): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        err = Pa_OpenStream(&out_stream, nullptr, &out_p, static_cast<double>(sr),
+                            kFramesPerBuffer, paClipOff, output_callback, nullptr);
+        if (err != paNoError) { fprintf(stderr, "Pa_OpenStream(out): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        err = Pa_StartStream(in_stream);
+        if (err != paNoError) { fprintf(stderr, "Pa_StartStream(in): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        err = Pa_StartStream(out_stream);
+        if (err != paNoError) { fprintf(stderr, "Pa_StartStream(out): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
+        const PaStreamInfo *oi = Pa_GetStreamInfo(out_stream);
+        printf("zuko-rt live (split-clock) | preset=%s model=%s gain=%.2f presence=%.2f master=%.2f "
+               "EQ=%.0f/%.0f/%.0f dB | in=[%s] out=[%s] | ~%.1f ms latency | Enter/Ctrl+C to stop\n",
+               preset.c_str(), model.c_str(), gain, presence, master, bass, mid, treble,
+               Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
+               oi->outputLatency * 1000.f);
+    }
 
     getchar();  // block until Enter (Ctrl+C also stops)
-    Pa_StopStream(stream);
-    Pa_CloseStream(stream);
+    Pa_StopStream(in_stream);
+    Pa_CloseStream(in_stream);
+    if (out_stream) { Pa_StopStream(out_stream); Pa_CloseStream(out_stream); }
     Pa_Terminate();
     return 0;
 }
