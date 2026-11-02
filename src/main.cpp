@@ -1,9 +1,9 @@
-// Zuko (RP2350) — Phase 1: I2S audio pass-through.
+// Zuko (RP2350) — Phase 2: I2S audio path with preamp DSP.
 //
 // Core 0 runs the audio path only:
 //   1. the Phase 0 clock/voltage bring-up and FPU sanity maths (unchanged),
 //   2. the I2S driver (PIO master clocks + DMA ping-pong) over a 32-sample block,
-//   3. the pass-through callback: copy the received block to the transmit block,
+//   3. the audio callback: convert int32→float, run preamp DSP, convert back,
 //   4. the block-processing budget report (min/avg/max cycles per block).
 // Core 1 keeps the Phase 0 heartbeat and is otherwise idle (UI/control is Phase 4).
 //
@@ -18,7 +18,6 @@
 #include <Arduino.h>
 #include <cstdint>
 #include <math.h>
-#include <string.h>
 #include <pico/stdlib.h>
 #include <hardware/clocks.h>
 #include <hardware/vreg.h>
@@ -30,6 +29,7 @@ namespace {
 
 using zuko::waveshape;
 using zuko::fir_at;
+using zuko::process_block;
 
 
 constexpr uint8_t kPinLed = 15;                    // external LED, active high
@@ -83,12 +83,43 @@ void printDspSanity() {
                   kFirIters, static_cast<unsigned long>(cycles), cyclesPerMac, sink);
 }
 
-// The I2S consumer/producer callback for this phase: copy the 32 received
-// samples (both channels, L0,R0,L1,R1,...) to the 32 transmitted samples. No
-// gain, no filtering, no processing — the point of Phase 1 is that audio
-// survives the round trip. Called from the DMA IRQ on core 0, from RAM.
+// DMA ISR audio callback: 24-bit left-aligned int32 → float → preamp DSP → int32.
+//
+// Format: interleaved L0,R0,L1,R1,... in bits [31:8] of each int32 word.
+// int32→float: multiply by 1/2^31 (kScale). float→int32: roundf to nearest
+// int24, saturate to [-8388608, 8388607] (prevents overflow on the left-shift),
+// then shift left 8 to restore the left-aligned format.
+// Saturation is the right choice here: the preamp output is bounded to
+// |y| < kPreampLevel (0.85) by construction, but clamping is cheap insurance.
 void __not_in_flash_func(audio_passthrough)(const int32_t *rx, int32_t *tx) {
-    memcpy(tx, rx, I2S_BLOCK_SAMPLES * sizeof(int32_t));
+    static constexpr float kScale = 1.0f / 2147483648.0f;  // 1/2^31: int32 → float [-1, 1]
+    static constexpr float kToInt = 8388608.0f;             // 2^23: float → int24
+
+    float L[I2S_BLOCK_SIZE];
+    float R[I2S_BLOCK_SIZE];
+
+    // deinterleave and convert to float
+    for (uint32_t i = 0; i < I2S_BLOCK_SIZE; ++i) {
+        L[i] = (float)rx[2 * i    ] * kScale;
+        R[i] = (float)rx[2 * i + 1] * kScale;
+    }
+
+    process_block(L, R, I2S_BLOCK_SIZE);
+
+    // convert back to 24-bit left-aligned and interleave
+    for (uint32_t i = 0; i < I2S_BLOCK_SIZE; ++i) {
+        float fl = L[i] > 1.0f ? 1.0f : (L[i] < -1.0f ? -1.0f : L[i]);
+        float fr = R[i] > 1.0f ? 1.0f : (R[i] < -1.0f ? -1.0f : R[i]);
+        int32_t sl = (int32_t)roundf(fl * kToInt);
+        int32_t sr = (int32_t)roundf(fr * kToInt);
+        // saturate to int24: roundf(1.0 * 2^23) == 2^23 would overflow the shift
+        if (sl >  8388607) sl =  8388607;
+        if (sl < -8388608) sl = -8388608;
+        if (sr >  8388607) sr =  8388607;
+        if (sr < -8388608) sr = -8388608;
+        tx[2 * i    ] = sl << 8;
+        tx[2 * i + 1] = sr << 8;
+    }
 }
 
 }  // namespace
@@ -112,7 +143,7 @@ void setup() {
 
     const vreg_voltage vreg = vreg_get_voltage();
     Serial.println();
-    Serial.println("=== Zuko (RP2350) — Phase 1 ===");
+    Serial.println("=== Zuko (RP2350) — Phase 2 ===");
     Serial.printf("F_CPU (configured)       : %lu Hz\n", static_cast<unsigned long>(F_CPU));
     Serial.printf("set_sys_clock_khz(%lu)  : %s\n", static_cast<unsigned long>(kTargetCpuKhz),
                   clockOk ? "ok" : "FAILED (PLL cannot hit target)");
@@ -138,7 +169,7 @@ void setup() {
     i2s_init(audio_passthrough);
     i2s_start();
 
-    Serial.println("I2S started — pass-through active.");
+    Serial.println("I2S started — preamp active (drive=4.0 level=0.85).");
 
     g_clockReady = true;
 }

@@ -228,6 +228,39 @@ call chain and adds no observable static footprint.
 | `host/test.py` | modified — WAV test now checks preamp engagement and bounded amplitude instead of bit-exact identity |
 | `docs/BUILD-NOTES.md` | appended — this section |
 
+## Phase 2 — firmware audio path wired (2026-11-01)
+
+`audio_passthrough` in `src/main.cpp` now runs the full preamp chain instead of
+`memcpy`. Conversion: 24-bit left-aligned int32 → float (×1/2³¹), `process_block`
+(L and R), then clamp→roundf→saturate int24→left-shift 8. Rounding choice:
+round-to-nearest (`roundf`); saturation to [-8388608, 8388607] before the shift
+prevents int32 overflow on the rare >0 dB path.
+
+### Verified results (real command output, 2026-11-01)
+
+| # | What was run | Result | Evidence |
+|---|---|---|---|
+| 1 | `pio run -e rpipico2` | **SUCCESS** | RAM 2.0% (10224 / 524288 B), flash 1.0% (41240 / 4190208 B) |
+| 2 | `arm-none-eabi-objdump -d firmware.elf \| grep -c vfma` | **hardware FPU in use** | 2 occurrences — no `__aeabi_fmul` anywhere |
+| 3 | `arm-none-eabi-nm --print-size firmware.elf` | ISR + callback in SRAM | `dma_irq_handler` @ `0x20000110` (152 B), `audio_passthrough` @ `0x200001a8` (280 B) — both in the `0x2000_0000` region |
+| 4 | `make -C host test` | **PASS** | `SELFTEST: PASS (0 failures)`; WAV test: 46000/48000 frames differ, max amp 0.8194 |
+
+Compared to Phase 1: RAM grew +264 B (the float L[]/R[] scratch buffers on the stack
+contribute 256 B; remainder is added code); flash grew +336 B. Both within expectations.
+
+### Cycle cost NOT yet measured
+
+The preamp path runs `tanh` per sample — cost will be visible in the `[budget]`
+lines at bring-up. The budget constraint is < 80% of 163,840 cycles (131,072) for
+the full DSP chain.
+
+### Files added or modified
+
+| File | Action |
+|---|---|
+| `src/main.cpp` | modified — `audio_passthrough` replaced: int32↔float conversion + `process_block`, `memcpy` and `<string.h>` removed, banner updated to Phase 2 |
+| `docs/BUILD-NOTES.md` | appended — this section |
+
 ### Blockers / uncertainties — status after the orchestrator's build
 
 1. **PIO instruction encoding** — RESOLVED for the encoding itself. All 28 words were
