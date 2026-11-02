@@ -17,16 +17,22 @@
 namespace zuko {
 
 // Ring-buffer state for one channel's FIR delay line.
-// n_taps must equal kCabFirTaps (the template keeps the size at compile time).
+// taps = how many coefficients are actually used (1..kCabFirTaps). Set it to
+// anything below kCabFirTaps to trade IR fidelity for lower group delay
+// (group delay = taps/2 samples). Defaults to the full IR.
 struct CabSimState {
     float buf[kCabFirTaps] = {};
-    int   head = 0;  // index of the oldest sample (write position)
+    int   head = 0;   // index of the oldest sample (write position)
+    int   taps = kCabFirTaps;
 };
 
 // Process one sample through the cabinet FIR.
 // h     — coefficient array of length kCabFirTaps, h[0] = most-recent tap.
-// state — ring buffer carrying the delay line between calls.
+// state — ring buffer carrying the delay line between calls; state.taps
+//         selects how many of those coefficients are used.
 inline float cab_sim_sample(float x, const float *h, CabSimState &state) {
+    const int taps = (state.taps > 0 && state.taps <= kCabFirTaps)
+                         ? state.taps : kCabFirTaps;
     // Write new sample into ring buffer at head, then advance head.
     state.buf[state.head] = x;
     int idx = state.head;
@@ -34,7 +40,7 @@ inline float cab_sim_sample(float x, const float *h, CabSimState &state) {
 
     // Convolve: h[0]*x[n], h[1]*x[n-1], ...
     float acc = 0.0f;
-    for (int k = 0; k < kCabFirTaps; ++k) {
+    for (int k = 0; k < taps; ++k) {
         acc += h[k] * state.buf[idx];
         idx = (idx == 0) ? kCabFirTaps - 1 : idx - 1;
     }

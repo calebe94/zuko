@@ -508,7 +508,7 @@ int run(const char *in_path, const char *out_path,
 int run_v2(const char *in_path, const char *out_path,
            float bass_db, float mid_db, float treble_db,
            float gain, float presence, float master,
-           zuko::AmpModel model) {
+           zuko::AmpModel model, int cab_taps) {
     Wav wav;
     if (!read_wav(in_path, &wav)) {
         fprintf(stderr, "harness: cannot read %s as 16-bit PCM WAV\n", in_path);
@@ -527,6 +527,8 @@ int run_v2(const char *in_path, const char *out_path,
         amp.jcm_coeffs = zuko::jcm800_init(fs, gain, presence, master);
 
     zuko::DspState state{};
+    state.cab_L.taps = cab_taps;
+    state.cab_R.taps = cab_taps;
     constexpr size_t kBlock = 32;
     for (size_t off = 0; off < frames; off += kBlock)
         zuko::process_block(L.data() + off, R.data() + off,
@@ -541,10 +543,10 @@ int run_v2(const char *in_path, const char *out_path,
     const char *model_str = (model == zuko::AmpModel::kJcm800) ? "jcm800" : "generic";
     printf("harness: %zu frames, %u ch, %u Hz -> %s "
            "(model=%s gain=%.2f presence=%.2f master=%.2f "
-           "bass=%.1f mid=%.1f treble=%.1f dB)\n",
+           "bass=%.1f mid=%.1f treble=%.1f dB cabsim_taps=%d)\n",
            frames, wav.channels, wav.sample_rate, out_path,
            model_str, double(gain), double(presence), double(master),
-           double(bass_db), double(mid_db), double(treble_db));
+           double(bass_db), double(mid_db), double(treble_db), cab_taps);
     return 0;
 }
 
@@ -586,6 +588,7 @@ int main(int argc, char **argv) {
     // ALL parameters are 0-100 (see ini_map.h); converted at the end.
     float bass = 50.f, mid = 50.f, treble = 50.f;      // 50 = 0 dB neutral
     float gain = 9.f, presence = 50.f, master = 80.f;  // ~old defaults 0.7/0.5/0.8
+    int cab_taps = zuko::kCabFirTaps;                  // full IR
     zuko::AmpModel model = zuko::AmpModel::kGeneric;
 
     // First pass: load --preset
@@ -598,6 +601,7 @@ int main(int argc, char **argv) {
             gain     = zuko_ini::get_f(ini, "gain",     gain);
             presence = zuko_ini::get_f(ini, "presence", presence);
             master   = zuko_ini::get_f(ini, "master",   master);
+            cab_taps = int(zuko_ini::get_f(ini, "cabsim_taps", float(cab_taps)));
             auto it = ini.find("model");
             if (it != ini.end() && it->second == "jcm800")
                 model = zuko::AmpModel::kJcm800;
@@ -614,6 +618,7 @@ int main(int argc, char **argv) {
         else if (arg == "--gain"     && i + 1 < argc) gain     = std::stof(argv[++i]);
         else if (arg == "--presence" && i + 1 < argc) presence = std::stof(argv[++i]);
         else if (arg == "--master"   && i + 1 < argc) master   = std::stof(argv[++i]);
+        else if (arg == "--cab"      && i + 1 < argc) cab_taps = std::stoi(argv[++i]);
         else if (arg == "--model"    && i + 1 < argc) {
             ++i;
             model = (std::string(argv[i]) == "jcm800")
@@ -630,5 +635,6 @@ int main(int argc, char **argv) {
     gain     = zuko_ini::pct_to_gain(gain);
     presence = zuko_ini::pct_to_unit(presence);
     master   = zuko_ini::pct_to_unit(master);
-    return run_v2(in_path, out_path, bass, mid, treble, gain, presence, master, model);
+    return run_v2(in_path, out_path, bass, mid, treble, gain, presence, master,
+                  model, cab_taps);
 }
