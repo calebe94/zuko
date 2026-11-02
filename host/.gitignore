@@ -1,3 +1,8 @@
-host/harness
-host/sine.wav
-host/out.wav
+harness
+sine.wav
+out.wav
+cab_ir_*.h
+bass_flat.wav
+bass_boost.wav
+eq_demo.wav
+riff_*.wav

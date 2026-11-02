@@ -29,7 +29,8 @@
 namespace {
 
 constexpr uint32_t kDefaultSr = 48000;
-constexpr unsigned kFramesPerBuffer = 128;
+constexpr unsigned kFramesPerBuffer = 64;   // ~1.3 ms per callback
+constexpr float kSuggestedLatency = 0.004f; // 4 ms; CoreAudio clamps if the HW can't
 
 // ---------------------------------------------------------------- DSP state
 
@@ -209,11 +210,11 @@ int main(int argc, char **argv) {
     in_p.device = in_dev;
     in_p.channelCount = 1;
     in_p.sampleFormat = paFloat32;
-    in_p.suggestedLatency = Pa_GetDeviceInfo(in_dev)->defaultLowInputLatency;
+    in_p.suggestedLatency = kSuggestedLatency;
     out_p.device = out_dev;
     out_p.channelCount = 2;
     out_p.sampleFormat = paFloat32;
-    out_p.suggestedLatency = Pa_GetDeviceInfo(out_dev)->defaultLowOutputLatency;
+    out_p.suggestedLatency = kSuggestedLatency;
 
     // Same hardware name (e.g. Tank G exposes separate in/out devices under one
     // name) -> one duplex stream, lowest latency. Different devices -> two
