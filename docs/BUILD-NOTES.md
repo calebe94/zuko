@@ -168,6 +168,66 @@ include that declares `rp2040` — did fail, and is recorded above.
 | `clock_gpio_init` | pico-sdk `hardware/clocks.h` | exists, but NOT usable for GP19 on RP2350: `GPOUT` only reaches GPIO 13, 15, 21, 23, 24, 25 |
 | `__not_in_flash_func` | pico-sdk `pico/platform/sections.h` | yes — defined as `#define __not_in_flash_func(name) __not_in_flash(__STRING(name)) name`, and proof that it worked is the RAM address of both handlers (result 4) |
 
+## Phase 2 — preamp DSP stage (host-verified, 2026-11-01)
+
+### What was implemented
+
+New file `src/dsp/preamp.h` — header-only, inline, no Arduino/pico headers.
+Transfer function: `y = level × tanh(drive × x)`, with default `drive = 4.0`,
+`level = 0.85`. Applied to both L and R channels in `process_block`.
+
+### Host test results (`make -C host test`)
+
+```
+clang++ -std=c++17 -O2 -Wall -Wextra -I.../src -o harness harness.cpp
+./harness --selftest
+SELFTEST: PASS (0 failures)
+python3 test.py
+harness: 48000 frames, 2 ch, 48000 Hz -> out.wav
+PASS: preamp engaged — 46000/48000 frames differ, max amp 0.8194 (out.wav = preamp demo, listen to hear saturation)
+```
+
+### What the selftest checked
+
+| Check | Method | Result |
+|---|---|---|
+| `preamp_sample` vs double-precision reference | 41 samples, x ∈ [−1, +1] step 0.05, tolerance 8 float ULPs | PASS |
+| Saturation bound at large input (`x = 10`) | `|output − level| < 0.001` | PASS |
+| `process_block` output matches `preamp_sample` reference | sample-exact comparison over 32-sample ramp | PASS |
+| `waveshape` vs double-precision reference (Phase 1, unchanged) | 41 samples, tolerance 8 float ULPs | PASS |
+| `fir_at` moving-average on ramp | expected 24.5, tolerance 1e-4 | PASS |
+
+### WAV test checked
+
+| Check | Result |
+|---|---|
+| At least half the 48 000 stereo frames differ from the unprocessed input | PASS (46 000/48 000 differ) |
+| Max output amplitude ≤ 1.0 (tanh bounded) | PASS (0.8194) |
+| Max output amplitude in expected range [0.5, 0.95] for 0.5-amplitude sine at drive=4 | PASS |
+
+`host/out.wav` — preamp-processed 1 kHz stereo sine at 48 kHz / 16-bit. Listen to hear tanh saturation vs the flat `sine.wav` input.
+
+### Firmware build (`pio run -e rpipico2`)
+
+```
+RAM:   [          ]   1.9% (used 9960 bytes from 524288 bytes)
+Flash: [          ]   1.0% (used 40904 bytes from 4190208 bytes)
+========================= [SUCCESS] Took 6.69 seconds =========================
+```
+
+Numbers unchanged from Phase 1 — the inline `preamp_block` is folded into the
+call chain and adds no observable static footprint.
+
+### Files added or modified
+
+| File | Action |
+|---|---|
+| `src/dsp/preamp.h` | new — preamp stage: `preamp_sample`, `preamp_block`, default drive/level constants |
+| `src/dsp/dsp.h` | modified — `#include "preamp.h"`, `process_block` now calls `preamp_block` |
+| `host/harness.cpp` | modified — selftest now checks `preamp_sample` vs double-precision references and `process_block` output; removed the Phase 1 pass-through identity check |
+| `host/test.py` | modified — WAV test now checks preamp engagement and bounded amplitude instead of bit-exact identity |
+| `docs/BUILD-NOTES.md` | appended — this section |
+
 ### Blockers / uncertainties — status after the orchestrator's build
 
 1. **PIO instruction encoding** — RESOLVED for the encoding itself. All 28 words were

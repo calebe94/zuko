@@ -126,15 +126,47 @@ int selftest() {
         ++failures;
     }
 
-    // pass-through block: identity
-    float L[32], R[32];
-    for (int i = 0; i < 32; ++i) { L[i] = float(i) / 32.f; R[i] = -L[i]; }
-    float L2[32], R2[32];
-    memcpy(L2, L, sizeof(L)); memcpy(R2, R, sizeof(R));
-    zuko::process_block(L2, R2, 32);
-    if (memcmp(L2, L, sizeof(L)) || memcmp(R2, R, sizeof(R))) {
-        printf("FAIL process_block: pass-through is not identity\n");
-        ++failures;
+    // preamp_sample vs double-precision reference
+    {
+        const float drive = zuko::kPreampDrive;
+        const float level = zuko::kPreampLevel;
+        for (double x = -1.0; x <= 1.0; x += 0.05) {
+            float got = zuko::preamp_sample(float(x), drive, level);
+            double ref = double(level) * std::tanh(double(drive) * x);
+            double tol = 8.0 * std::abs(double(got)) * 1.19e-7;
+            if (tol < 1e-7) tol = 1e-7;
+            if (std::abs(got - ref) > tol) {
+                printf("FAIL preamp_sample(x=%.3f): got %.9g want %.9g\n", x, got, ref);
+                ++failures;
+            }
+        }
+        // Saturation: at large input the output must approach level to within 0.1%
+        float sat = zuko::preamp_sample(10.0f, drive, level);
+        if (std::abs(sat - level) > 0.001f) {
+            printf("FAIL preamp saturation: got %.9g, want near %.9g\n",
+                   double(sat), double(level));
+            ++failures;
+        }
+    }
+
+    // process_block (preamp engaged): output must match preamp_sample references
+    {
+        float L[32], R[32];
+        for (int i = 0; i < 32; ++i) { L[i] = float(i) / 32.f; R[i] = -L[i]; }
+        float L2[32], R2[32];
+        memcpy(L2, L, sizeof(L)); memcpy(R2, R, sizeof(R));
+        zuko::process_block(L2, R2, 32);
+        for (int i = 0; i < 32; ++i) {
+            float eL = zuko::preamp_sample(L[i], zuko::kPreampDrive, zuko::kPreampLevel);
+            float eR = zuko::preamp_sample(R[i], zuko::kPreampDrive, zuko::kPreampLevel);
+            if (L2[i] != eL || R2[i] != eR) {
+                printf("FAIL process_block[%d]: L got %.9g want %.9g, "
+                       "R got %.9g want %.9g\n",
+                       i, double(L2[i]), double(eL), double(R2[i]), double(eR));
+                ++failures;
+                break;
+            }
+        }
     }
 
     printf(failures ? "SELFTEST: %d FAILURES\n" : "SELFTEST: PASS (%d failures)\n", failures);

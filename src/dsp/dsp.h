@@ -13,6 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "preamp.h"
+
 namespace zuko {
 
 constexpr int kFirTaps = 32;  // moving-average FIR used as the FPU sanity check
@@ -34,12 +36,10 @@ inline float fir_at(const float *x, const float *h, int n, int taps) {
 
 // Per-block processing callback, float domain, in place.
 // L and R hold n interleaved-free mono samples each, in [-1.0, +1.0].
-// Phase 1: identity (pass-through). Phase 2 replaces this body only; the
-// signature is what the harness and the firmware both link against.
+// Phase 2: preamp stage — tanh soft-clip with default drive and level.
 inline void process_block(float *L, float *R, size_t n) {
-    (void)L;
-    (void)R;
-    (void)n;
+    preamp_block(L, n, kPreampDrive, kPreampLevel);
+    preamp_block(R, n, kPreampDrive, kPreampLevel);
 }
 
 }  // namespace zuko

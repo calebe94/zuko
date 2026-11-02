@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host harness WAV test: generate a sine, run it through the host harness
-(zuko::process_block), and check the Phase 1 pass-through is bit-exact."""
+(zuko::process_block with preamp stage), and verify preamp properties.
+out.wav is the preamp-processed WAV — listen to it to hear the saturation."""
 
 import math
 import struct
@@ -52,12 +53,27 @@ def main():
         print("FAIL: frame count changed (%d -> %d)" % (len(src), len(dst)))
         return 1
 
+    # Preamp must change the signal: expect most frames to differ from input
     diff = sum(1 for a, b in zip(src, dst) if a != b)
-    if diff:
-        print("FAIL: %d/%d frames differ (pass-through must be bit-exact)" % (diff, len(src)))
+    if diff < len(src) // 2:
+        print("FAIL: fewer than half the frames differ — preamp may not be engaged "
+              "(%d/%d differ)" % (diff, len(src)))
         return 1
 
-    print("PASS: pass-through is bit-exact over %d stereo frames" % len(src))
+    # tanh is bounded: output must never exceed full scale
+    max_amp = max(abs(s) for frame in dst for s in frame) / 32768.0
+    if max_amp > 1.0:
+        print("FAIL: output exceeds full scale (max_amp=%.4f)" % max_amp)
+        return 1
+
+    # With drive=4.0, level=0.85, a 0.5-amplitude sine peaks at
+    # 0.85 * tanh(4.0 * 0.5) ≈ 0.819 — check we are in that ballpark
+    if max_amp < 0.5 or max_amp > 0.95:
+        print("FAIL: output amplitude %.4f outside expected range [0.5, 0.95]" % max_amp)
+        return 1
+
+    print("PASS: preamp engaged — %d/%d frames differ, max amp %.4f "
+          "(out.wav = preamp demo, listen to hear saturation)" % (diff, len(src), max_amp))
     return 0
 
 
