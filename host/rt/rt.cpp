@@ -167,8 +167,11 @@ int main(int argc, char **argv) {
     const int in_dev = find_device(in_sub.c_str(), true);
     const int out_dev = find_device(out_sub.c_str(), false);
     if (in_dev == paNoDevice || out_dev == paNoDevice) {
-        fprintf(stderr, "device not found (in=\"%s\" out=\"%s\"). Use --list.\n",
-                in_sub.c_str(), out_sub.c_str());
+        fprintf(stderr, "device not found:\n");
+        if (in_dev == paNoDevice)
+            fprintf(stderr, "  --in \"%s\": no device with an INPUT matching this (see --list)\n", in_sub.c_str());
+        if (out_dev == paNoDevice)
+            fprintf(stderr, "  --out \"%s\": no device with an OUTPUT matching this (see --list)\n", out_sub.c_str());
         Pa_Terminate();
         return 1;
     }
