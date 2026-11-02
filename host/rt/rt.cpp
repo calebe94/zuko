@@ -90,16 +90,27 @@ int callback(const void *in_, void *out_, unsigned long n,
     return paContinue;
 }
 
-int find_device(const char *substr, bool is_input) {
-    if (!substr || !*substr) return is_input ? Pa_GetDefaultInputDevice()
-                                             : Pa_GetDefaultOutputDevice();
+int find_device(const char *spec, bool is_input) {
+    // spec may be a numeric device index ("1") or a name substring ("Tank").
+    if (!spec || !*spec) return is_input ? Pa_GetDefaultInputDevice()
+                                         : Pa_GetDefaultOutputDevice();
+    if (isdigit(static_cast<unsigned char>(spec[0]))) {
+        char *end = nullptr;
+        const long idx = strtol(spec, &end, 10);
+        if (end && *end == '\0' && idx >= 0 && idx < Pa_GetDeviceCount()) {
+            const PaDeviceInfo *d = Pa_GetDeviceInfo(static_cast<int>(idx));
+            const int ch = is_input ? d->maxInputChannels : d->maxOutputChannels;
+            if (ch >= 1) return static_cast<int>(idx);
+        }
+        return paNoDevice;
+    }
     const int n = Pa_GetDeviceCount();
     for (int i = 0; i < n; ++i) {
         const PaDeviceInfo *d = Pa_GetDeviceInfo(i);
         if (!d) continue;
         if (is_input && d->maxInputChannels < 1) continue;
         if (!is_input && d->maxOutputChannels < 1) continue;
-        if (strstr(Pa_GetDeviceInfo(i)->name, substr)) return i;
+        if (strstr(d->name, spec)) return i;
     }
     return paNoDevice;
 }
