@@ -24,8 +24,13 @@
 #include <hardware/vreg.h>
 
 #include "i2s.h"
+#include "dsp/dsp.h"
 
 namespace {
+
+using zuko::waveshape;
+using zuko::fir_at;
+
 
 constexpr uint8_t kPinLed = 15;                    // external LED, active high
 constexpr uint32_t kTargetCpuKhz = F_CPU / 1000;   // F_CPU comes from board_build.f_cpu
@@ -34,7 +39,6 @@ constexpr uint32_t kHeartbeatMs = 500;
 constexpr uint32_t kSerialWaitMs = 2000;           // give a USB host time to attach
 constexpr uint32_t kBudgetReportBlocks = 100;      // one block is 666.7 us -> ~67 ms
 
-constexpr int kFirTaps = 32;
 constexpr int kFirIters = 1000;
 
 // Set by core 0 once the clock is final and the banner is printed; core 1 waits
@@ -48,21 +52,6 @@ int vregMillivolts(vreg_voltage v) {
     return (code <= static_cast<int>(VREG_VOLTAGE_1_30)) ? 550 + 50 * code : -1;
 }
 
-// Tube-ish waveshaper: biased tanh with the DC offset of the bias removed.
-// Phase 2 material; kept here because it is the FPU sanity check.
-float waveshape(float x, float drive, float bias) {
-    return tanhf(drive * (x + bias)) - tanhf(drive * bias);
-}
-
-// Direct-form FIR, y[n] = sum_k h[k] * x[n-k]. Caller guarantees n >= taps-1.
-float firAt(const float *x, const float *h, int n, int taps) {
-    float acc = 0.0f;
-    for (int k = 0; k < taps; ++k) {
-        acc += h[k] * x[n - k];
-    }
-    return acc;
-}
-
 void printDspSanity() {
     Serial.println("-- tanhf waveshaper (drive=4, bias=0.1) --");
     const float pts[5] = {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f};
@@ -73,12 +62,12 @@ void printDspSanity() {
     // 32-tap moving average over a ramp x[n] = n. At n = 40 the window covers
     // x[9..40], so the exact answer is (9 + 40) / 2 = 24.5.
     float x[64];
-    float h[kFirTaps];
+    float h[zuko::kFirTaps];
     for (int i = 0; i < 64; ++i) x[i] = static_cast<float>(i);
-    for (int k = 0; k < kFirTaps; ++k) h[k] = 1.0f / kFirTaps;
+    for (int k = 0; k < zuko::kFirTaps; ++k) h[k] = 1.0f / zuko::kFirTaps;
 
     Serial.printf("-- %d-tap FIR on a ramp: y[40] = %.4f (expect 24.5000) --\n",
-                  kFirTaps, firAt(x, h, 40, kFirTaps));
+                  zuko::kFirTaps, fir_at(x, h, 40, zuko::kFirTaps));
 
     // Timing: hardware FPU is a few cycles per multiply-accumulate, a software
     // float library is tens of cycles. The varying index keeps the compiler
@@ -86,10 +75,10 @@ void printDspSanity() {
     float sink = 0.0f;
     const uint32_t t0 = rp2040.getCycleCount();
     for (int i = 0; i < kFirIters; ++i) {
-        sink += firAt(x, h, kFirTaps - 1 + (i & 31), kFirTaps);
+        sink += fir_at(x, h, zuko::kFirTaps - 1 + (i & 31), zuko::kFirTaps);
     }
     const uint32_t cycles = rp2040.getCycleCount() - t0;
-    const float cyclesPerMac = static_cast<float>(cycles) / (kFirIters * kFirTaps);
+    const float cyclesPerMac = static_cast<float>(cycles) / (kFirIters * zuko::kFirTaps);
     Serial.printf("   %d FIRs: %lu cycles = %.2f cycles/MAC (checksum %.3f)\n",
                   kFirIters, static_cast<unsigned long>(cycles), cyclesPerMac, sink);
 }
