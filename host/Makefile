@@ -13,7 +13,7 @@ REPO     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
 all: harness
 
-harness: harness.cpp $(REPO)/src/dsp/dsp.h
+harness: harness.cpp $(REPO)/src/dsp/dsp.h $(REPO)/src/dsp/cab_ir.h
 	$(CXX) $(CXXFLAGS) -I$(REPO)/src -o $@ harness.cpp
 
 test: harness

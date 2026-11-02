@@ -15,6 +15,7 @@
 
 #include "preamp.h"
 #include "tone_stack.h"
+#include "cab_sim.h"
 
 namespace zuko {
 
@@ -35,22 +36,26 @@ inline float fir_at(const float *x, const float *h, int n, int taps) {
     return acc;
 }
 
-// Caller-owned DSP state: biquad filter memory for L and R channels.
+// Caller-owned DSP state: biquad filter memory + cab-sim ring buffers.
 // Zero-initialise once before the first process_block call: DspState state{}.
 struct DspState {
     ToneStackState ts_L;
     ToneStackState ts_R;
+    CabSimState    cab_L;
+    CabSimState    cab_R;
 };
 
-// Per-block processing: preamp → 3-band tone stack, in place.
+// Per-block processing: preamp → tone stack → cabinet FIR, in place.
 // coeffs are computed once by tone_stack_init() and stay fixed across blocks.
-// state carries the biquad delay lines between blocks (caller owns, no globals).
+// state carries all delay lines between blocks (caller owns, no globals).
 inline void process_block(float *L, float *R, size_t n,
                            DspState &state, const ToneStackCoeffs &coeffs) {
     preamp_block(L, n, kPreampDrive, kPreampLevel);
     preamp_block(R, n, kPreampDrive, kPreampLevel);
     tone_stack_block(L, n, coeffs, state.ts_L);
     tone_stack_block(R, n, coeffs, state.ts_R);
+    cab_sim_block(L, n, kCabFirCoeffs, state.cab_L);
+    cab_sim_block(R, n, kCabFirCoeffs, state.cab_R);
 }
 
 }  // namespace zuko

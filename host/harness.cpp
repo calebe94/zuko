@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -149,28 +150,35 @@ int selftest() {
         }
     }
 
-    // process_block with unity EQ: output must match preamp_sample within 1e-5
+    // process_block stability: preamp → tone stack → cab sim must be bounded.
+    // Preamp clamps to ±kPreampLevel; the FIR is linear so it can amplify,
+    // but the cab IR is normalised to unit peak (DC sum < 1 for a typical LP).
+    // Bound: allow up to 2× kPreampLevel to be safe.
     {
         const float kFs = 48000.f;
         zuko::ToneStackCoeffs unity = zuko::tone_stack_init(kFs, 0.f, 0.f, 0.f);
         zuko::DspState state{};
-        float L[32], R[32];
-        for (int i = 0; i < 32; ++i) { L[i] = float(i) / 32.f; R[i] = -L[i]; }
-        float L2[32], R2[32];
-        memcpy(L2, L, sizeof(L)); memcpy(R2, R, sizeof(R));
-        zuko::process_block(L2, R2, 32, state, unity);
-        for (int i = 0; i < 32; ++i) {
-            float eL = zuko::preamp_sample(L[i], zuko::kPreampDrive, zuko::kPreampLevel);
-            float eR = zuko::preamp_sample(R[i], zuko::kPreampDrive, zuko::kPreampLevel);
-            const float tol = 1e-5f;
-            if (std::abs(L2[i] - eL) > tol || std::abs(R2[i] - eR) > tol) {
-                printf("FAIL process_block[%d]: L got %.9g want %.9g, "
-                       "R got %.9g want %.9g\n",
-                       i, double(L2[i]), double(eL), double(R2[i]), double(eR));
-                ++failures;
-                break;
+        const float bound = 2.0f * zuko::kPreampLevel;
+        bool bounded = true;
+        for (int blk = 0; blk < 64 && bounded; ++blk) {
+            float L[32], R[32];
+            for (int i = 0; i < 32; ++i) {
+                float t = float(blk * 32 + i) / float(64 * 32 - 1);
+                L[i] = t < 0.5f ? (2.f * t - 1.f) : (1.f - 2.f * (t - 0.5f));
+                R[i] = -L[i];
+            }
+            zuko::process_block(L, R, 32, state, unity);
+            for (int i = 0; i < 32 && bounded; ++i) {
+                if (std::abs(L[i]) > bound || std::abs(R[i]) > bound) {
+                    printf("FAIL process_block stability: |L[%d]|=%.9g or |R[%d]|=%.9g "
+                           "exceeded %.4g\n",
+                           blk*32+i, double(std::abs(L[i])),
+                           blk*32+i, double(std::abs(R[i])), double(bound));
+                    bounded = false;
+                }
             }
         }
+        if (!bounded) ++failures;
     }
 
     // ---- Tone stack self-tests ----
@@ -251,6 +259,79 @@ int selftest() {
             }
         }
         if (!bounded) ++failures;
+    }
+
+    // ---- Cab sim self-tests ----
+
+    // Test 1: impulse response — feed a unit impulse, output must equal the
+    // first kCabFirTaps coefficients exactly.
+    {
+        zuko::CabSimState cs{};
+        const int CHECK = 8;
+        bool ok = true;
+        for (int n = 0; n < zuko::kCabFirTaps + CHECK; ++n) {
+            float in = (n == 0) ? 1.0f : 0.0f;
+            float out = zuko::cab_sim_sample(in, zuko::kCabFirCoeffs, cs);
+            if (n < zuko::kCabFirTaps) {
+                // Output at time n must equal kCabFirCoeffs[n].
+                float want = zuko::kCabFirCoeffs[n];
+                if (out != want) {
+                    printf("FAIL cab_sim impulse[%d]: got %.9g want %.9g\n",
+                           n, double(out), double(want));
+                    ok = false;
+                    if (n >= CHECK) break;
+                }
+            }
+        }
+        if (!ok) ++failures;
+    }
+
+    // Test 2: DC gain — steady-state output within 0.1 dB of FIR DC sum.
+    // DC sum = sum of all coefficients (double precision).
+    {
+        double dc_sum = 0.0;
+        for (int k = 0; k < zuko::kCabFirTaps; ++k)
+            dc_sum += double(zuko::kCabFirCoeffs[k]);
+
+        zuko::CabSimState cs{};
+        // Feed kCabFirTaps + 512 ones to let the filter settle.
+        const int SETTLE = zuko::kCabFirTaps + 512;
+        float last = 0.0f;
+        for (int n = 0; n < SETTLE; ++n)
+            last = zuko::cab_sim_sample(1.0f, zuko::kCabFirCoeffs, cs);
+
+        double gain_db = 20.0 * std::log10(std::abs(double(last) / dc_sum));
+        if (std::abs(gain_db) > 0.1) {
+            printf("FAIL cab_sim DC gain: steady-state=%.9g dc_sum=%.9g "
+                   "error=%.4f dB (want < 0.1 dB)\n",
+                   double(last), dc_sum, gain_db);
+            ++failures;
+        }
+    }
+
+    // Test 3: CPU cost estimate (HOST ONLY, wall-clock).
+    // Clearly labelled ESTIMATE — not silicon numbers.
+    {
+        const int ITER = 1 << 18;  // 262144 samples for stable timing
+        zuko::CabSimState cs{};
+        volatile float sink = 0.0f;
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (int i = 0; i < ITER; ++i)
+            sink = zuko::cab_sim_sample(0.5f, zuko::kCabFirCoeffs, cs);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        (void)sink;
+
+        double elapsed_s = double(t1.tv_sec  - t0.tv_sec) +
+                           double(t1.tv_nsec - t0.tv_nsec) * 1e-9;
+        double ns_per_sample = elapsed_s / ITER * 1e9;
+        // RP2350 at 245.76 MHz: cycles ≈ ns × 0.24576
+        double est_cycles_per_sample = ns_per_sample * 245.76e6 / 1e9;
+        double est_cycles_per_block  = est_cycles_per_sample * 32.0;
+        printf("[cab_sim timing ESTIMATE — host clang, NOT silicon]\n"
+               "  %.1f ns/sample  =>  %.0f cycles/sample @ 245.76 MHz (estimate)\n"
+               "  %.0f cycles/32-sample block (estimate, budget 131072)\n",
+               ns_per_sample, est_cycles_per_sample, est_cycles_per_block);
     }
 
     printf(failures ? "SELFTEST: %d FAILURES\n" : "SELFTEST: PASS (%d failures)\n", failures);

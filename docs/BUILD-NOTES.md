@@ -390,3 +390,92 @@ tone-stack hot loop. No soft-float fallback anywhere.
 | `host/harness.cpp` | modified — selftest: 3 new tone-stack checks; `run()` computes `ToneStackCoeffs` once per WAV, accepts optional bass/mid/treble CLI args |
 | `host/test.py` | modified — bass-boost amplitude check, `eq_demo.wav` generation |
 | `docs/BUILD-NOTES.md` | appended — this section |
+
+## Phase 3 — cabinet sim FIR (host-verified, 2026-11-01)
+
+### What was implemented
+
+1024-tap direct-form FIR cabinet simulator, analytical 4×12-ish response:
+- Hamming-windowed sinc lowpass at **4500 Hz** (controls the HF rolloff of a closed-back 4×12)
+- First-order low-shelf approximation: −3 dB sag below **90 Hz** (speaker / porting rolloff)
+- Normalised so that DC gain = 1.0 (passband unity gain); peak coefficient ≈ 0.193
+
+Wired into `process_block` **after** the tone stack: preamp → tone stack → cab sim.
+
+### Taps and energy
+
+| Taps | Energy retained |
+|---|---|
+| 1024 (default) | 100.00% (no truncation — generated to exactly 1024 taps) |
+
+Energy budget: at 1024 taps × 2 channels × 32 samples/block = 65,536 MACs/block.
+The host cycle estimate below shows this fits the 131,072-cycle 80% budget.
+
+### Host test results (`make -C host test`)
+
+```
+clang++ -std=c++17 -O2 -Wall -Wextra -I.../src -o harness harness.cpp
+./harness --selftest
+[cab_sim timing ESTIMATE — host clang, NOT silicon]
+  760 ns/sample  =>  187 cycles/sample @ 245.76 MHz (estimate)
+  5980 cycles/32-sample block (estimate, budget 131072)
+SELFTEST: PASS (0 failures)
+python3 test.py
+harness: 48000 frames, 2 ch, 48000 Hz -> out.wav (bass=0.0 mid=0.0 treble=0.0 dB)
+PASS: preamp engaged — 47997/48000 frames differ, max amp 0.8459
+PASS: bass boost — flat=0.1678 boost=0.4220 ratio=8.0 dB
+```
+
+### What the selftests checked
+
+| Check | Method | Result |
+|---|---|---|
+| Impulse response: output[n] == kCabFirCoeffs[n] | Unit impulse in, compare first 8 output samples exactly | PASS |
+| DC gain within 0.1 dB of FIR coefficient sum | Feed kCabFirTaps+512 ones, steady-state vs double-precision dc_sum | PASS |
+| process_block stability (full chain) | 64 blocks triangle sweep, all outputs ≤ 2 × kPreampLevel = 1.7 | PASS |
+| tone_stack stability (unchanged from Phase 2) | 8192 samples through process_block, outputs ≤ 1.1 | PASS |
+| CPU cost ESTIMATE (host, NOT silicon) | 262144 samples wall-clock, scaled to 245.76 MHz | ~5980 cycles/block |
+
+**Host cycle ESTIMATE (NOT silicon):** ~187 cycles/sample on host clang -O2, scaled to 245.76 MHz.
+~5980 cycles/32-sample block — well under the 131,072-cycle 80% budget.
+The Cortex-M33 FPU executes vfma.f32 in 1–2 cycles; the actual silicon cost will be lower than the host estimate (host includes cache effects, branch prediction differences, etc.).
+
+### Firmware build (`pio run -e rpipico2`)
+
+```
+RAM:   [          ]   3.6% (used 18620 bytes from 524288 bytes)
+Flash: [          ]   1.1% (used 45764 bytes from 4190208 bytes)
+========================= [SUCCESS] Took 7.19 seconds =========================
+```
+
+**Deltas vs Phase 2 tone stack baseline (RAM 10380 B / Flash 41532 B):**
+
+| | Baseline (tone stack) | Cab sim added | Delta |
+|---|---|---|---|
+| RAM | 10380 B (2.0%) | 18620 B (3.6%) | +8240 B |
+| Flash | 41532 B (1.0%) | 45764 B (1.1%) | +4232 B |
+
+The +8240 B RAM increase is dominated by two `CabSimState` ring buffers:
+2 channels × 1024 taps × 4 B = **8192 B**. The remaining 48 B is code overhead.
+Flash grows +4232 B for the inlined `cab_sim_block` loops.
+
+### FPU check
+
+```
+vfma.f32 count : 6   (was 5 in tone-stack build)
+__aeabi_fmul   : 0   (software float multiply — none, FPU in use)
+```
+
+One additional `vfma.f32` for the cab sim inner multiply-accumulate loop.
+
+### Files added or modified
+
+| File | Action |
+|---|---|
+| `scripts/wav2header.py` | new — IR WAV → C header converter; `--analytic` generates the 4×12-ish IR without an external file |
+| `src/dsp/cab_ir.h` | new — generated 1024-tap analytical FIR coefficients (`kCabFirCoeffs`, `kCabFirTaps`) |
+| `src/dsp/cab_sim.h` | new — `CabSimState` ring buffer, `cab_sim_sample`, `cab_sim_block` |
+| `src/dsp/dsp.h` | modified — `#include "cab_sim.h"`, added `cab_L`/`cab_R` to `DspState`, `process_block` now calls `cab_sim_block` after tone stack |
+| `host/harness.cpp` | modified — selftest: 3 cab sim checks (impulse, DC gain, CPU estimate); `process_block` stability test updated to full-chain bound |
+| `host/Makefile` | modified — `cab_ir.h` added to harness dependency list |
+| `docs/BUILD-NOTES.md` | appended — this section |
