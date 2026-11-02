@@ -31,6 +31,11 @@ using zuko::waveshape;
 using zuko::fir_at;
 using zuko::process_block;
 
+// DSP state and coefficients: initialised in setup(), used in audio_passthrough ISR.
+// All bands flat (0 dB) until a control plane sets them; that is Phase 4 work.
+static zuko::ToneStackCoeffs s_eq;   // set by tone_stack_init() in setup()
+static zuko::DspState         s_dsp_state{};  // biquad delay lines for L and R
+
 
 constexpr uint8_t kPinLed = 15;                    // external LED, active high
 constexpr uint32_t kTargetCpuKhz = F_CPU / 1000;   // F_CPU comes from board_build.f_cpu
@@ -104,7 +109,7 @@ void __not_in_flash_func(audio_passthrough)(const int32_t *rx, int32_t *tx) {
         R[i] = (float)rx[2 * i + 1] * kScale;
     }
 
-    process_block(L, R, I2S_BLOCK_SIZE);
+    process_block(L, R, I2S_BLOCK_SIZE, s_dsp_state, s_eq);
 
     // convert back to 24-bit left-aligned and interleave
     for (uint32_t i = 0; i < I2S_BLOCK_SIZE; ++i) {
@@ -166,10 +171,12 @@ void setup() {
                   static_cast<unsigned long>(I2S_BLOCK_SIZE),
                   static_cast<unsigned long>(I2S_BLOCK_SAMPLES));
 
+    s_eq = zuko::tone_stack_init(float(I2S_SAMPLE_RATE), 0.f, 0.f, 0.f);
+
     i2s_init(audio_passthrough);
     i2s_start();
 
-    Serial.println("I2S started — preamp active (drive=4.0 level=0.85).");
+    Serial.println("I2S started — preamp active (drive=4.0 level=0.85), tone stack flat (0/0/0 dB).");
 
     g_clockReady = true;
 }

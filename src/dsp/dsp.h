@@ -14,6 +14,7 @@
 #include <cstdint>
 
 #include "preamp.h"
+#include "tone_stack.h"
 
 namespace zuko {
 
@@ -34,12 +35,22 @@ inline float fir_at(const float *x, const float *h, int n, int taps) {
     return acc;
 }
 
-// Per-block processing callback, float domain, in place.
-// L and R hold n interleaved-free mono samples each, in [-1.0, +1.0].
-// Phase 2: preamp stage — tanh soft-clip with default drive and level.
-inline void process_block(float *L, float *R, size_t n) {
+// Caller-owned DSP state: biquad filter memory for L and R channels.
+// Zero-initialise once before the first process_block call: DspState state{}.
+struct DspState {
+    ToneStackState ts_L;
+    ToneStackState ts_R;
+};
+
+// Per-block processing: preamp → 3-band tone stack, in place.
+// coeffs are computed once by tone_stack_init() and stay fixed across blocks.
+// state carries the biquad delay lines between blocks (caller owns, no globals).
+inline void process_block(float *L, float *R, size_t n,
+                           DspState &state, const ToneStackCoeffs &coeffs) {
     preamp_block(L, n, kPreampDrive, kPreampLevel);
     preamp_block(R, n, kPreampDrive, kPreampLevel);
+    tone_stack_block(L, n, coeffs, state.ts_L);
+    tone_stack_block(R, n, coeffs, state.ts_R);
 }
 
 }  // namespace zuko

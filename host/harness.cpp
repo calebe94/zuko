@@ -149,17 +149,21 @@ int selftest() {
         }
     }
 
-    // process_block (preamp engaged): output must match preamp_sample references
+    // process_block with unity EQ: output must match preamp_sample within 1e-5
     {
+        const float kFs = 48000.f;
+        zuko::ToneStackCoeffs unity = zuko::tone_stack_init(kFs, 0.f, 0.f, 0.f);
+        zuko::DspState state{};
         float L[32], R[32];
         for (int i = 0; i < 32; ++i) { L[i] = float(i) / 32.f; R[i] = -L[i]; }
         float L2[32], R2[32];
         memcpy(L2, L, sizeof(L)); memcpy(R2, R, sizeof(R));
-        zuko::process_block(L2, R2, 32);
+        zuko::process_block(L2, R2, 32, state, unity);
         for (int i = 0; i < 32; ++i) {
             float eL = zuko::preamp_sample(L[i], zuko::kPreampDrive, zuko::kPreampLevel);
             float eR = zuko::preamp_sample(R[i], zuko::kPreampDrive, zuko::kPreampLevel);
-            if (L2[i] != eL || R2[i] != eR) {
+            const float tol = 1e-5f;
+            if (std::abs(L2[i] - eL) > tol || std::abs(R2[i] - eR) > tol) {
                 printf("FAIL process_block[%d]: L got %.9g want %.9g, "
                        "R got %.9g want %.9g\n",
                        i, double(L2[i]), double(eL), double(R2[i]), double(eR));
@@ -169,11 +173,92 @@ int selftest() {
         }
     }
 
+    // ---- Tone stack self-tests ----
+    const float kFs = 48000.f;
+    static constexpr float kTsPi = 3.14159265358979323846f;
+
+    // Test 1: unity gain — all bands at 0 dB must pass signal unchanged.
+    // Run 2048 samples of a 1 kHz sine; skip first 512 (settling); measure peak.
+    {
+        const int N = 2048, SETTLE = 512;
+        const float f = 1000.f, A = 0.5f;
+        zuko::ToneStackCoeffs c = zuko::tone_stack_init(kFs, 0.f, 0.f, 0.f);
+        zuko::ToneStackState  st{};
+        float peak = 0.f;
+        for (int i = 0; i < N; ++i) {
+            float x = A * std::sin(2.f * kTsPi * f * i / kFs);
+            x = zuko::biquad_sample(x, c.bass,   st.bass);
+            x = zuko::biquad_sample(x, c.mid,    st.mid);
+            x = zuko::biquad_sample(x, c.treble, st.treble);
+            if (i >= SETTLE && std::abs(x) > peak) peak = std::abs(x);
+        }
+        const float tol = A * 0.005f;  // 0.5 % of input amplitude
+        if (std::abs(peak - A) > tol) {
+            printf("FAIL tone_stack unity: steady-state peak=%.9g want=%.9g "
+                   "(tol=%.9g)\n", double(peak), double(A), double(tol));
+            ++failures;
+        }
+    }
+
+    // Test 2: +12 dB mid boost at 800 Hz must measure within 0.5 dB of 12 dB.
+    // The RBJ peaking EQ has gain exactly A^2 = 10^(dBgain/20) at its centre
+    // frequency, so this is an analytically tight target.
+    {
+        const int N = 4096, SETTLE = 1024;
+        const float f = 800.f, A = 0.1f;
+        zuko::ToneStackCoeffs c = zuko::tone_stack_init(kFs, 0.f, 12.f, 0.f);
+        zuko::ToneStackState  st{};
+        float peak = 0.f;
+        for (int i = 0; i < N; ++i) {
+            float x = A * std::sin(2.f * kTsPi * f * i / kFs);
+            x = zuko::biquad_sample(x, c.bass,   st.bass);
+            x = zuko::biquad_sample(x, c.mid,    st.mid);
+            x = zuko::biquad_sample(x, c.treble, st.treble);
+            if (i >= SETTLE && std::abs(x) > peak) peak = std::abs(x);
+        }
+        const double measured_db = 20.0 * std::log10(double(peak) / double(A));
+        if (std::abs(measured_db - 12.0) > 0.5) {
+            printf("FAIL tone_stack +12dB mid@800Hz: measured %.4f dB, "
+                   "want 12.0 ± 0.5 dB\n", measured_db);
+            ++failures;
+        }
+    }
+
+    // Test 3: stability — bounded output for a ±1 full-scale triangle sweep.
+    // Preamp clamps output to ±0.85; unity-gain tone stack should not amplify.
+    // Bound is 1.1 to give numerical headroom.
+    {
+        const int N = 8192;
+        zuko::ToneStackCoeffs c = zuko::tone_stack_init(kFs, 0.f, 0.f, 0.f);
+        zuko::DspState state{};
+        float L[32], R[32];
+        bool bounded = true;
+        for (int off = 0; off < N && bounded; off += 32) {
+            for (int i = 0; i < 32; ++i) {
+                float t = float(off + i) / float(N - 1);
+                L[i] = t < 0.5f ? (2.f * t - 1.f) : (1.f - 2.f * (t - 0.5f));
+                R[i] = -L[i];
+            }
+            zuko::process_block(L, R, 32, state, c);
+            for (int i = 0; i < 32; ++i) {
+                if (std::abs(L[i]) > 1.1f || std::abs(R[i]) > 1.1f) {
+                    printf("FAIL tone_stack stability: |L[%d]|=%.9g or |R[%d]|=%.9g "
+                           "exceeded 1.1\n", off + i, double(std::abs(L[i])),
+                           off + i, double(std::abs(R[i])));
+                    bounded = false;
+                    break;
+                }
+            }
+        }
+        if (!bounded) ++failures;
+    }
+
     printf(failures ? "SELFTEST: %d FAILURES\n" : "SELFTEST: PASS (%d failures)\n", failures);
     return failures;
 }
 
-int run(const char *in_path, const char *out_path) {
+int run(const char *in_path, const char *out_path,
+        float bass_db = 0.f, float mid_db = 0.f, float treble_db = 0.f) {
     Wav wav;
     if (!read_wav(in_path, &wav)) {
         fprintf(stderr, "harness: cannot read %s as 16-bit PCM WAV\n", in_path);
@@ -194,10 +279,16 @@ int run(const char *in_path, const char *out_path) {
         for (size_t i = 0; i < frames; ++i) L[i] = R[i] = to_float(wav.samples[i]);
     }
 
+    // Compute tone stack coefficients once; maintain filter state across blocks.
+    const zuko::ToneStackCoeffs eq =
+        zuko::tone_stack_init(float(wav.sample_rate), bass_db, mid_db, treble_db);
+    zuko::DspState state{};
+
     constexpr size_t kBlock = 32;
     for (size_t off = 0; off < frames; off += kBlock) {
         zuko::process_block(L.data() + off, R.data() + off,
-                            (frames - off < kBlock) ? frames - off : kBlock);
+                            (frames - off < kBlock) ? frames - off : kBlock,
+                            state, eq);
     }
 
     wav.samples.resize(frames * (wav.channels >= 2 ? 2 : 1));
@@ -218,8 +309,10 @@ int run(const char *in_path, const char *out_path) {
         fprintf(stderr, "harness: cannot write %s\n", out_path);
         return 2;
     }
-    printf("harness: %zu frames, %u ch, %u Hz -> %s\n",
-           frames, wav.channels, wav.sample_rate, out_path);
+    printf("harness: %zu frames, %u ch, %u Hz -> %s "
+           "(bass=%.1f mid=%.1f treble=%.1f dB)\n",
+           frames, wav.channels, wav.sample_rate, out_path,
+           double(bass_db), double(mid_db), double(treble_db));
     return 0;
 }
 
@@ -227,7 +320,15 @@ int run(const char *in_path, const char *out_path) {
 
 int main(int argc, char **argv) {
     if (argc == 2 && std::string(argv[1]) == "--selftest") return selftest();
-    if (argc == 3) return run(argv[1], argv[2]);
-    fprintf(stderr, "usage: harness in.wav out.wav | harness --selftest\n");
+    if (argc >= 3 && argc <= 6) {
+        float bass_db = 0.f, mid_db = 0.f, treble_db = 0.f;
+        if (argc >= 4) bass_db   = std::stof(argv[3]);
+        if (argc >= 5) mid_db    = std::stof(argv[4]);
+        if (argc >= 6) treble_db = std::stof(argv[5]);
+        return run(argv[1], argv[2], bass_db, mid_db, treble_db);
+    }
+    fprintf(stderr,
+            "usage: harness in.wav out.wav [bass_db [mid_db [treble_db]]]\n"
+            "       harness --selftest\n");
     return 2;
 }

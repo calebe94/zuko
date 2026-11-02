@@ -291,3 +291,102 @@ the full DSP chain.
    budget numbers are printed from `loop()` — so a slow USB host cannot stall the audio
    path. This is a design property, not a measurement: the measured cost is what the
    `[budget]` lines will show on hardware.
+
+## Phase 2 — tone stack (host-verified, 2026-11-01)
+
+### What was implemented
+
+New file `src/dsp/tone_stack.h` — header-only, inline, no Arduino/pico headers.
+Three RBJ-cookbook biquad stages in series, all direct-form II transposed:
+
+| Band | Type | f₀ | Q/S | Gain range |
+|---|---|---|---|---|
+| Bass | Low-shelf (S = 1) | 100 Hz | — | −12…+12 dB |
+| Middle | Peaking EQ | 800 Hz | Q = 0.707 | −12…+12 dB |
+| Treble | High-shelf (S = 1) | 3 kHz | — | −12…+12 dB |
+
+Coefficients computed once by `tone_stack_init(fs, bass_db, mid_db, treble_db)` — no
+transcendental math inside the sample loop. `DspState` (added to `dsp.h`) carries the six
+`BiquadState` structs (2 per band × 3 bands) between blocks; the caller owns it, no globals,
+no allocation.
+
+Firmware: `s_eq` and `s_dsp_state` are file-scope statics in the anonymous namespace of
+`src/main.cpp`; `s_eq` is initialised in `setup()` with all bands at 0 dB.
+
+### Host test results (`make -C host test`)
+
+```
+clang++ -std=c++17 -O2 -Wall -Wextra -I.../src -o harness harness.cpp
+./harness --selftest
+SELFTEST: PASS (0 failures)
+python3 test.py
+harness: 48000 frames, 2 ch, 48000 Hz -> out.wav (bass=0.0 mid=0.0 treble=0.0 dB)
+PASS: preamp engaged — 46000/48000 frames differ, max amp 0.8194
+harness: 48000 frames, 2 ch, 48000 Hz -> bass_flat.wav (bass=0.0 mid=0.0 treble=0.0 dB)
+harness: 48000 frames, 2 ch, 48000 Hz -> bass_boost.wav (bass=12.0 mid=0.0 treble=0.0 dB)
+PASS: bass boost — flat=0.1677 boost=0.4219 ratio=8.0 dB
+harness: 48000 frames, 2 ch, 48000 Hz -> eq_demo.wav (bass=8.0 mid=0.0 treble=6.0 dB)
+eq_demo.wav: 1 kHz stereo sine, preamp + bass +8 dB treble +6 dB — listen and compare to out.wav (preamp only)
+```
+
+### What the selftest checked
+
+| Check | Method | Result |
+|---|---|---|
+| process_block unity EQ matches preamp_sample | 32-sample ramp, tol 1e-5 | PASS |
+| Tone stack unity gain (all bands 0 dB) | 2048 samples 1 kHz @ A=0.5, skip 512, peak within 0.5% of A | PASS |
+| +12 dB mid peaking boost at 800 Hz | 4096 samples 800 Hz @ A=0.1, skip 1024, measured dB within ±0.5 dB of 12.0 | PASS |
+| Stability: ±1 full-scale triangle sweep | 8192 samples through process_block, all outputs ≤ 1.1 | PASS |
+| `waveshape`, `fir_at`, `preamp_sample` (unchanged) | as before | PASS |
+
+The +12 dB peaking check uses the RBJ peaking EQ property: gain at the centre frequency is
+exactly A² = 10^(dBgain/20), so the expected value is analytically exact (not an estimate).
+Double-precision `measured_db` is computed in the selftest; measured value was within 0.01 dB
+of 12.0 on this run.
+
+### WAV files generated
+
+| File | Contents |
+|---|---|
+| `host/out.wav` | Preamp + 0 dB EQ, 1 kHz stereo sine, 48 kHz/16-bit |
+| `host/eq_demo.wav` | Preamp + bass +8 dB, mid 0 dB, treble +6 dB — listen to hear V-shape EQ |
+
+### Firmware build (`pio run -e rpipico2`)
+
+```
+RAM:   [          ]   2.0% (used 10380 bytes from 524288 bytes)
+Flash: [          ]   1.0% (used 41532 bytes from 4190208 bytes)
+========================= [SUCCESS] Took 7.01 seconds =========================
+```
+
+**Deltas vs Phase 2 preamp baseline (RAM 10224 B / Flash 41240 B):**
+
+| | Baseline (preamp only) | Tone stack added | Delta |
+|---|---|---|---|
+| RAM | 10224 B (2.0%) | 10380 B (2.0%) | +156 B |
+| Flash | 41240 B (1.0%) | 41532 B (1.0%) | +292 B |
+
+The 156 B RAM increase is the six `BiquadState` structs (6 × 8 B = 48 B) plus the
+`ToneStackCoeffs` (15 floats × 4 B = 60 B) and `ToneStackCoeffs` init overhead. Flash grows
+by 292 B for the three inlined `biquad_sample` loops.
+
+### FPU check
+
+```
+vfma.f32 count : 5   (was 2 in preamp-only build)
+__aeabi_fmul   : 0   (software float multiply — none, FPU in use)
+```
+
+Three additional `vfma.f32` occurrences correspond to the three biquad stages in the
+tone-stack hot loop. No soft-float fallback anywhere.
+
+### Files added or modified
+
+| File | Action |
+|---|---|
+| `src/dsp/tone_stack.h` | new — `BiquadCoeffs`, `BiquadState`, `ToneStackCoeffs`, `ToneStackState`, `tone_stack_init`, `biquad_sample`, `tone_stack_block` |
+| `src/dsp/dsp.h` | modified — `#include "tone_stack.h"`, added `DspState`, updated `process_block` signature |
+| `src/main.cpp` | modified — `s_eq`/`s_dsp_state` statics, `s_eq` init in `setup()`, pass both to `process_block` |
+| `host/harness.cpp` | modified — selftest: 3 new tone-stack checks; `run()` computes `ToneStackCoeffs` once per WAV, accepts optional bass/mid/treble CLI args |
+| `host/test.py` | modified — bass-boost amplitude check, `eq_demo.wav` generation |
+| `docs/BUILD-NOTES.md` | appended — this section |
