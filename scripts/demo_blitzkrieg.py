@@ -128,6 +128,16 @@ def write_wav(path, sig):
         w.writeframes(bytes(frames))
 
 
+def run_harness(out_dir, *args):
+    import subprocess
+    cmd = ["./harness"] + list(args)
+    r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(out_dir))
+    print(r.stdout.strip())
+    if r.returncode != 0:
+        print(r.stderr.strip(), file=sys.stderr)
+    return r.returncode
+
+
 def main():
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("host")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +153,18 @@ def main():
     dur = len(mix) / SR
     write_wav(out_dir / "riff_clean.wav", mix)
     print(f"wrote {out_dir/'riff_clean.wav'} ({dur:.1f}s, mono 48 kHz, {len(RIFF)} 8ths)")
+
+    # Run through clean preset (generic preamp)
+    rc = run_harness(out_dir, "riff_clean.wav", "riff_clean_out.wav",
+                     "--preset", "presets/clean.ini")
+    if rc == 0:
+        print(f"wrote {out_dir/'riff_clean_out.wav'} (clean preset)")
+
+    # Run through JCM800 preset
+    rc = run_harness(out_dir, "riff_clean.wav", "riff_jcm800.wav",
+                     "--preset", "presets/jcm800.ini")
+    if rc == 0:
+        print(f"wrote {out_dir/'riff_jcm800.wav'} (jcm800 preset — listen vs riff_clean_out.wav)")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@
 #include "preamp.h"
 #include "tone_stack.h"
 #include "cab_sim.h"
+#include "jcm800.h"
 
 namespace zuko {
 
@@ -36,6 +37,15 @@ inline float fir_at(const float *x, const float *h, int n, int taps) {
     return acc;
 }
 
+// Selectable amp model for process_block overload.
+enum class AmpModel : uint8_t { kGeneric = 0, kJcm800 = 1 };
+
+// Immutable amp configuration computed once before processing begins.
+struct AmpConfig {
+    AmpModel     model      = AmpModel::kGeneric;
+    Jcm800Coeffs jcm_coeffs{};  // only used when model == kJcm800
+};
+
 // Caller-owned DSP state: biquad filter memory + cab-sim ring buffers.
 // Zero-initialise once before the first process_block call: DspState state{}.
 struct DspState {
@@ -43,15 +53,35 @@ struct DspState {
     ToneStackState ts_R;
     CabSimState    cab_L;
     CabSimState    cab_R;
+    Jcm800State    jcm800_L{};  // used only when model == kJcm800
+    Jcm800State    jcm800_R{};
 };
 
 // Per-block processing: preamp → tone stack → cabinet FIR, in place.
+// Default (5-arg) overload uses generic tanh preamp — firmware calls this form.
 // coeffs are computed once by tone_stack_init() and stay fixed across blocks.
 // state carries all delay lines between blocks (caller owns, no globals).
 inline void process_block(float *L, float *R, size_t n,
                            DspState &state, const ToneStackCoeffs &coeffs) {
     preamp_block(L, n, kPreampDrive, kPreampLevel);
     preamp_block(R, n, kPreampDrive, kPreampLevel);
+    tone_stack_block(L, n, coeffs, state.ts_L);
+    tone_stack_block(R, n, coeffs, state.ts_R);
+    cab_sim_block(L, n, kCabFirCoeffs, state.cab_L);
+    cab_sim_block(R, n, kCabFirCoeffs, state.cab_R);
+}
+
+// 6-arg overload: selectable amp model (generic or jcm800).
+inline void process_block(float *L, float *R, size_t n,
+                           DspState &state, const ToneStackCoeffs &coeffs,
+                           const AmpConfig &amp) {
+    if (amp.model == AmpModel::kJcm800) {
+        jcm800_block(L, n, amp.jcm_coeffs, state.jcm800_L);
+        jcm800_block(R, n, amp.jcm_coeffs, state.jcm800_R);
+    } else {
+        preamp_block(L, n, kPreampDrive, kPreampLevel);
+        preamp_block(R, n, kPreampDrive, kPreampLevel);
+    }
     tone_stack_block(L, n, coeffs, state.ts_L);
     tone_stack_block(R, n, coeffs, state.ts_R);
     cab_sim_block(L, n, kCabFirCoeffs, state.cab_L);
