@@ -30,6 +30,14 @@ docker run --rm -v zuko-pio-cache:/root/.platformio -v "$PWD":/workspace \
 
 ## Next steps (in order)
 
+0. **DONE 2026-11-01 (this loop, worker = claude CLI Sonnet 4.6, R$ 0):**
+   - `12308b2` Phase 2 preamp stage (tanh), host-verified
+   - `2741598` preamp wired into the firmware audio path (int32<->float, saturating)
+   - `fc0c4f8` tone stack (RBJ biquads), host + firmware wired
+   - `140803f` Phase 3 cab sim (1024-tap analytic FIR + wav2header.py)
+   - Verified each step: host selftest PASS; Docker build SUCCESS (RAM 3.6% 18620 B,
+     flash 1.1% 45764 B); vfma.f32 6; __aeabi_fmul 0; ISR + callback in SRAM.
+   - Host cycle ESTIMATE for the full chain ~4.6% of block budget — NOT silicon-measured.
 1. **Phase 2 DSP, host-first:** first preamp model in `src/dsp/` (waveshaper with
    real transfer curves), validated through `host/` against a double-precision
    reference BEFORE any firmware change. Firmware only changes after the host test
