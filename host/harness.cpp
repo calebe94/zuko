@@ -432,6 +432,131 @@ int selftest() {
                        ratio_db);
             }
         }
+
+        // JCM800 Test 4: headroom/sag regression guard. With the defaults
+        // (headroom = 1, sag = 0) jcm800_sample must reproduce the legacy
+        // chain (two tanh stages around the coupling highpass) exactly.
+        {
+            const float drive = 2.0f + 0.7f * 6.0f;
+            zuko::Jcm800Coeffs jc = zuko::jcm800_init(kFs, 0.7f, 0.5f, 0.8f);
+            zuko::Jcm800State st{};
+            zuko::BiquadState ref_presence{};
+            float ref_hp_x = 0.f, ref_hp_y = 0.f;
+            bool ok = true;
+            for (int i = 0; i < 4096 && ok; ++i) {
+                const float xs = 0.3f * std::sin(2.f * kPi * 440.f * i / kFs)
+                               + 0.1f * std::sin(2.f * kPi * 123.f * i / kFs);
+                const float got = zuko::jcm800_sample(xs, jc, st);
+                // Legacy reference: the pre-headroom/sag topology.
+                const float s1 = zuko::jcm_clip(xs, drive);
+                const float hp = jc.hp_b0 * s1 - jc.hp_b0 * ref_hp_x
+                               + jc.hp_pole * ref_hp_y;
+                ref_hp_x = s1;
+                ref_hp_y = hp;
+                const float s2 = zuko::jcm_clip(hp, drive);
+                const float ref = zuko::biquad_sample(s2, jc.presence, ref_presence)
+                                * jc.master;
+                if (std::abs(got - ref) > 1e-6f) {
+                    printf("FAIL jcm800 legacy identity: i=%d got %.9g want %.9g\n",
+                           i, double(got), double(ref));
+                    ok = false;
+                }
+            }
+            if (!ok) ++failures;
+        }
+
+        // JCM800 Test 5: headroom preserves picking dynamics. The RMS ratio
+        // of a loud (0.4) vs soft (0.05) 440 Hz sine must improve by well
+        // over 2x with the pad engaged (host ESTIMATE of perceived dynamics).
+        {
+            const int N = 4096, SETTLE = 1024;
+            auto rms_at = [&](float headroom, float amp) {
+                zuko::Jcm800Coeffs jc = zuko::jcm800_init(kFs, 0.7f, 0.0f, 1.0f, headroom);
+                zuko::Jcm800State st{};
+                double ss = 0.0;
+                for (int i = 0; i < N; ++i) {
+                    const float xs = amp * std::sin(2.f * kPi * 440.f * i / kFs);
+                    const float ys = zuko::jcm800_sample(xs, jc, st);
+                    if (i >= SETTLE) ss += double(ys) * double(ys);
+                }
+                return float(std::sqrt(ss / (N - SETTLE)));
+            };
+            const float r_off = rms_at(1.0f, 0.40f) / rms_at(1.0f, 0.05f);
+            const float r_on  = rms_at(0.20f, 0.40f) / rms_at(0.20f, 0.05f);
+            if (!(r_on > 2.0f * r_off) || !(r_on > 1.5f)) {
+                printf("FAIL jcm800 headroom dynamics: ratio off=%.3f on=%.3f "
+                       "(want on > 2x off and > 1.5)\n",
+                       double(r_off), double(r_on));
+                ++failures;
+            } else {
+                printf("[jcm800 headroom dynamics: loud/soft RMS ratio "
+                       "off=%.3f on=%.3f (host ESTIMATE)]\n",
+                       double(r_off), double(r_on));
+            }
+        }
+
+        // JCM800 Test 6: sag reduces the sustained level of a loud note
+        // (drive2 drops while the envelope is high).
+        {
+            const int N = 8192, SETTLE = 2048;
+            auto loud_rms = [&](float sag) {
+                zuko::Jcm800Coeffs jc = zuko::jcm800_init(kFs, 0.7f, 0.0f, 1.0f,
+                                                          0.3f, sag);
+                zuko::Jcm800State st{};
+                double ss = 0.0;
+                for (int i = 0; i < N; ++i) {
+                    const float xs = 0.4f * std::sin(2.f * kPi * 440.f * i / kFs);
+                    const float ys = zuko::jcm800_sample(xs, jc, st);
+                    if (i >= SETTLE) ss += double(ys) * double(ys);
+                }
+                return float(std::sqrt(ss / (N - SETTLE)));
+            };
+            const float rms_off = loud_rms(0.0f);
+            const float rms_on  = loud_rms(0.6f);
+            if (!(rms_on < rms_off * 0.98f)) {
+                printf("FAIL jcm800 sag loud-level: sag on=%.6g off=%.6g "
+                       "(want on < 0.98x off)\n", double(rms_on), double(rms_off));
+                ++failures;
+            } else {
+                printf("[jcm800 sag loud-level: on=%.6g off=%.6g (want on < 0.98x off)]\n",
+                       double(rms_on), double(rms_off));
+            }
+        }
+
+        // JCM800 Test 7: stability at extreme settings — headroom = 0.05
+        // (max +18 dB output compensation), sag = 1, full-scale triangle
+        // sweep through the full chain. Bounded by master * cap + margin.
+        // presence = 0 so the static shelf gain does not enter the bound
+        // (this test targets the sag envelope path, not the shelf).
+        {
+            const float bound = 0.85f * zuko::kHeadroomOutCap * 1.05f;
+            zuko::Jcm800Coeffs jc = zuko::jcm800_init(kFs, 1.0f, 0.0f, 1.0f,
+                                                      0.05f, 1.0f);
+            zuko::ToneStackCoeffs unity = zuko::tone_stack_init(kFs, 0.f, 0.f, 0.f);
+            zuko::AmpConfig amp;
+            amp.model      = zuko::AmpModel::kJcm800;
+            amp.jcm_coeffs = jc;
+            zuko::DspState state{};
+            bool bounded = true;
+            for (int blk = 0; blk < 64 && bounded; ++blk) {
+                float L[32], R[32];
+                for (int i = 0; i < 32; ++i) {
+                    float t = float(blk * 32 + i) / float(64 * 32 - 1);
+                    L[i] = t < 0.5f ? (2.f * t - 1.f) : (1.f - 2.f * (t - 0.5f));
+                    R[i] = -L[i];
+                }
+                zuko::process_block(L, R, 32, state, unity, amp);
+                for (int i = 0; i < 32 && bounded; ++i) {
+                    if (std::abs(L[i]) > bound || std::abs(R[i]) > bound) {
+                        printf("FAIL jcm800 extreme stability: |L[%d]|=%.9g "
+                               "exceeded %.4g\n",
+                               blk * 32 + i, double(std::abs(L[i])), double(bound));
+                        bounded = false;
+                    }
+                }
+            }
+            if (!bounded) ++failures;
+        }
     }
 
     printf(failures ? "SELFTEST: %d FAILURES\n" : "SELFTEST: PASS (%d failures)\n", failures);
@@ -504,10 +629,12 @@ int run(const char *in_path, const char *out_path,
     return 0;
 }
 
-// Extended run: supports model selection, gain/presence/master, and INI presets.
+// Extended run: supports model selection, gain/presence/master, dynamics
+// (headroom/sag), and INI presets.
 int run_v2(const char *in_path, const char *out_path,
            float bass_db, float mid_db, float treble_db,
            float gain, float presence, float master,
+           float headroom, float sag, float sag_att_ms, float sag_rel_ms,
            zuko::AmpModel model, int cab_taps) {
     Wav wav;
     if (!read_wav(in_path, &wav)) {
@@ -524,7 +651,8 @@ int run_v2(const char *in_path, const char *out_path,
     zuko::AmpConfig amp;
     amp.model = model;
     if (model == zuko::AmpModel::kJcm800)
-        amp.jcm_coeffs = zuko::jcm800_init(fs, gain, presence, master);
+        amp.jcm_coeffs = zuko::jcm800_init(fs, gain, presence, master,
+                                           headroom, sag, sag_att_ms, sag_rel_ms);
 
     zuko::DspState state{};
     zuko::cab_set_taps(state.cab_L, cab_taps);
@@ -542,10 +670,11 @@ int run_v2(const char *in_path, const char *out_path,
     }
     const char *model_str = (model == zuko::AmpModel::kJcm800) ? "jcm800" : "generic";
     printf("harness: %zu frames, %u ch, %u Hz -> %s "
-           "(model=%s gain=%.2f presence=%.2f master=%.2f "
-           "bass=%.1f mid=%.1f treble=%.1f dB cabsim_taps=%d)\n",
+           "(model=%s gain=%.2f presence=%.2f master=%.2f hr=%.2f sag=%.2f "
+           "sag_ms=%.0f/%.0f bass=%.1f mid=%.1f treble=%.1f dB cabsim_taps=%d)\n",
            frames, wav.channels, wav.sample_rate, out_path,
            model_str, double(gain), double(presence), double(master),
+           double(headroom), double(sag), double(sag_att_ms), double(sag_rel_ms),
            double(bass_db), double(mid_db), double(treble_db), cab_taps);
     return 0;
 }
@@ -562,6 +691,8 @@ int main(int argc, char **argv) {
                 "[--mid N] [--treble N]\n"
                 "                              [--gain N] [--presence N] "
                 "[--master N] [--model generic|jcm800]\n"
+                "                              [--headroom N] [--sag N] "
+                "[--sag-attack MS] [--sag-release MS]\n"
                 "       harness --selftest\n");
         return 2;
     }
@@ -588,6 +719,8 @@ int main(int argc, char **argv) {
     // ALL parameters are 0-100 (see ini_map.h); converted at the end.
     float bass = 50.f, mid = 50.f, treble = 50.f;      // 50 = 0 dB neutral
     float gain = 9.f, presence = 50.f, master = 80.f;  // ~old defaults 0.7/0.5/0.8
+    float headroom = 100.f, sag = 0.f;                 // 100 = pad off, 0 = sag off
+    float sag_att_ms = 10.f, sag_rel_ms = 250.f;
     int cab_taps = zuko::kCabFirTaps;                  // full IR
     zuko::AmpModel model = zuko::AmpModel::kGeneric;
 
@@ -601,6 +734,10 @@ int main(int argc, char **argv) {
             gain     = zuko_ini::get_f(ini, "gain",     gain);
             presence = zuko_ini::get_f(ini, "presence", presence);
             master   = zuko_ini::get_f(ini, "master",   master);
+            headroom = zuko_ini::get_f(ini, "headroom", headroom);
+            sag      = zuko_ini::get_f(ini, "sag",      sag);
+            sag_att_ms = zuko_ini::get_f(ini, "sag_attack_ms",  sag_att_ms);
+            sag_rel_ms = zuko_ini::get_f(ini, "sag_release_ms", sag_rel_ms);
             cab_taps = int(zuko_ini::get_f(ini, "cabsim_taps", float(cab_taps)));
             auto it = ini.find("model");
             if (it != ini.end() && it->second == "jcm800")
@@ -618,6 +755,10 @@ int main(int argc, char **argv) {
         else if (arg == "--gain"     && i + 1 < argc) gain     = std::stof(argv[++i]);
         else if (arg == "--presence" && i + 1 < argc) presence = std::stof(argv[++i]);
         else if (arg == "--master"   && i + 1 < argc) master   = std::stof(argv[++i]);
+        else if (arg == "--headroom" && i + 1 < argc) headroom = std::stof(argv[++i]);
+        else if (arg == "--sag"      && i + 1 < argc) sag      = std::stof(argv[++i]);
+        else if (arg == "--sag-attack"  && i + 1 < argc) sag_att_ms = std::stof(argv[++i]);
+        else if (arg == "--sag-release" && i + 1 < argc) sag_rel_ms = std::stof(argv[++i]);
         else if (arg == "--cab"      && i + 1 < argc) cab_taps = std::stoi(argv[++i]);
         else if (arg == "--model"    && i + 1 < argc) {
             ++i;
@@ -635,6 +776,8 @@ int main(int argc, char **argv) {
     gain     = zuko_ini::pct_to_gain(gain);
     presence = zuko_ini::pct_to_unit(presence);
     master   = zuko_ini::pct_to_unit(master);
+    headroom = zuko_ini::pct_to_headroom(headroom);
+    sag      = zuko_ini::pct_to_unit(sag);
     return run_v2(in_path, out_path, bass, mid, treble, gain, presence, master,
-                  model, cab_taps);
+                  headroom, sag, sag_att_ms, sag_rel_ms, model, cab_taps);
 }

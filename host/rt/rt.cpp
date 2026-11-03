@@ -178,10 +178,16 @@ int main(int argc, char **argv) {
     const float bass_pct     = zuko_ini::get_f(kv, "bass", 50.f);
     const float mid_pct      = zuko_ini::get_f(kv, "mid", 50.f);
     const float treble_pct   = zuko_ini::get_f(kv, "treble", 50.f);
+    const float headroom_pct = zuko_ini::get_f(kv, "headroom", 100.f);
+    const float sag_pct      = zuko_ini::get_f(kv, "sag", 0.f);
+    const float sag_att_ms   = zuko_ini::get_f(kv, "sag_attack_ms", 10.f);
+    const float sag_rel_ms   = zuko_ini::get_f(kv, "sag_release_ms", 250.f);
     const int cab_taps = int(zuko_ini::get_f(kv, "cabsim_taps", float(zuko::kCabFirTaps)));
     const float gain     = zuko_ini::pct_to_gain(gain_pct);
     const float presence = zuko_ini::pct_to_unit(presence_pct);
     const float master   = zuko_ini::pct_to_unit(master_pct);
+    const float headroom = zuko_ini::pct_to_headroom(headroom_pct);
+    const float sag      = zuko_ini::pct_to_unit(sag_pct);
     const float bass     = zuko_ini::pct_to_db(bass_pct);
     const float mid      = zuko_ini::pct_to_db(mid_pct);
     const float treble   = zuko_ini::pct_to_db(treble_pct);
@@ -192,7 +198,9 @@ int main(int argc, char **argv) {
     zuko::cab_set_taps(g_engine.state.cab_R, cab_taps);
     if (model == "jcm800") {
         g_engine.amp.model = zuko::AmpModel::kJcm800;
-        g_engine.amp.jcm_coeffs = zuko::jcm800_init(static_cast<float>(sr), gain, presence, master);
+        g_engine.amp.jcm_coeffs = zuko::jcm800_init(
+            static_cast<float>(sr), gain, presence, master,
+            headroom, sag, sag_att_ms, sag_rel_ms);
     } else {
         g_engine.amp.model = zuko::AmpModel::kGeneric;
     }
@@ -235,8 +243,9 @@ int main(int argc, char **argv) {
         if (err != paNoError) { fprintf(stderr, "Pa_StartStream: %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
         const PaStreamInfo *info = Pa_GetStreamInfo(in_stream);
         printf("zuko-rt live | preset=%s model=%s gain=%.0f presence=%.0f master=%.0f "
-               "EQ=%.0f/%.0f/%.0f cab=%d taps | in=[%s] out=[%s] | %.1f ms latency | Enter/Ctrl+C to stop\n",
+               "hr=%.0f sag=%.0f EQ=%.0f/%.0f/%.0f cab=%d taps | in=[%s] out=[%s] | %.1f ms latency | Enter/Ctrl+C to stop\n",
                preset.c_str(), model.c_str(), gain_pct, presence_pct, master_pct,
+               headroom_pct, sag_pct,
                bass_pct, mid_pct, treble_pct, cab_taps,
                Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
                info->outputLatency * 1000.f);
@@ -253,8 +262,9 @@ int main(int argc, char **argv) {
         if (err != paNoError) { fprintf(stderr, "Pa_StartStream(out): %s\n", Pa_GetErrorText(err)); Pa_Terminate(); return 1; }
         const PaStreamInfo *oi = Pa_GetStreamInfo(out_stream);
         printf("zuko-rt live (split-clock) | preset=%s model=%s gain=%.0f presence=%.0f master=%.0f "
-               "EQ=%.0f/%.0f/%.0f cab=%d taps | in=[%s] out=[%s] | ~%.1f ms latency | Enter/Ctrl+C to stop\n",
+               "hr=%.0f sag=%.0f EQ=%.0f/%.0f/%.0f cab=%d taps | in=[%s] out=[%s] | ~%.1f ms latency | Enter/Ctrl+C to stop\n",
                preset.c_str(), model.c_str(), gain_pct, presence_pct, master_pct,
+               headroom_pct, sag_pct,
                bass_pct, mid_pct, treble_pct, cab_taps,
                Pa_GetDeviceInfo(in_dev)->name, Pa_GetDeviceInfo(out_dev)->name,
                oi->outputLatency * 1000.f);

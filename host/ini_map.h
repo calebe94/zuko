@@ -9,6 +9,11 @@
 //   bass/mid/treble 0-100  -> -12..+12 dB (50 = neutral)
 //   presence        0-100  -> 0..+12 dB shelf
 //   master          0-100  -> 0..1 volume
+//   headroom        0-100  -> input pad before stage 1 (100 = off; lower =
+//                             more picking dynamics), loudness-compensated
+//                             at the output up to +18 dB (see jcm800.h)
+//   sag             0-100  -> envelope-driven drive2 reduction depth (0 = off)
+//   sag_attack_ms / sag_release_ms — raw milliseconds (default 10 / 250)
 //
 // gain above 100 is allowed on purpose (drive beyond 50 = extreme crush;
 // tanh-bounded, mathematically safe). See presets/jcm800-punk.ini.
@@ -58,6 +63,13 @@ inline float pct_to_db(float pct) { return pct * 0.24f - 12.0f; }
 
 // 0-100 -> 0..1.
 inline float pct_to_unit(float pct) { return pct / 100.0f; }
+
+// 0-100 -> headroom pad scale (100 = off). Clamped to >= 0.05 so an extreme
+// pad cannot demand more than the +18 dB output compensation cap.
+inline float pct_to_headroom(float pct) {
+    const float u = pct_to_unit(pct);
+    return u < 0.05f ? 0.05f : u;
+}
 
 }  // namespace zuko_ini
 
