@@ -13,7 +13,9 @@ REPO     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
 all: harness
 
-harness: harness.cpp $(REPO)/src/dsp/dsp.h $(REPO)/src/dsp/jcm800.h $(REPO)/src/dsp/cab_ir.h
+harness: harness.cpp $(REPO)/src/dsp/dsp.h $(REPO)/src/dsp/preamp.h \
+         $(REPO)/src/dsp/tone_stack.h $(REPO)/src/dsp/cab_sim.h \
+         $(REPO)/src/dsp/cab_ir.h $(REPO)/src/dsp/jcm800.h $(REPO)/host/ini_map.h
 	$(CXX) $(CXXFLAGS) -I$(REPO)/src -o $@ harness.cpp
 
 test: harness

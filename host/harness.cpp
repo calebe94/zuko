@@ -527,8 +527,8 @@ int run_v2(const char *in_path, const char *out_path,
         amp.jcm_coeffs = zuko::jcm800_init(fs, gain, presence, master);
 
     zuko::DspState state{};
-    state.cab_L.taps = cab_taps;
-    state.cab_R.taps = cab_taps;
+    zuko::cab_set_taps(state.cab_L, cab_taps);
+    zuko::cab_set_taps(state.cab_R, cab_taps);
     constexpr size_t kBlock = 32;
     for (size_t off = 0; off < frames; off += kBlock)
         zuko::process_block(L.data() + off, R.data() + off,

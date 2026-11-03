@@ -188,8 +188,8 @@ int main(int argc, char **argv) {
     const std::string model = kv.count("model") ? kv.at("model") : "generic";
 
     g_engine.ts = zuko::tone_stack_init(static_cast<float>(sr), bass, mid, treble);
-    g_engine.state.cab_L.taps = cab_taps;
-    g_engine.state.cab_R.taps = cab_taps;
+    zuko::cab_set_taps(g_engine.state.cab_L, cab_taps);
+    zuko::cab_set_taps(g_engine.state.cab_R, cab_taps);
     if (model == "jcm800") {
         g_engine.amp.model = zuko::AmpModel::kJcm800;
         g_engine.amp.jcm_coeffs = zuko::jcm800_init(static_cast<float>(sr), gain, presence, master);
