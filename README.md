@@ -133,3 +133,7 @@ Open the USB serial monitor at 115200 (`pio device monitor`). Phase 1 prints:
 | `scripts/` | host-side tools (placeholder) |
 | `Dockerfile` | reproducible build environment |
 | `.github/workflows/build.yml` | CI build and firmware artifact |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
